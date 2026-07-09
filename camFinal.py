@@ -1,3 +1,66 @@
+'''
+-> just run python3 camFinal.py
+
+get_screen_resolution()
+    Detects the connected display's resolution via the `xrandr` command
+    (e.g. 800x480 for a 7" screen). Used only to size the preview window.
+    Returns None if detection fails, so the rest of the script degrades
+    gracefully instead of crashing.
+ 
+half_area_window_size(screen_w, screen_h)
+    Shrinks the screen resolution so the preview window covers HALF the
+    screen's pixel AREA (not half the width/height — that would only be
+    a quarter of the area). Since area scales with the square of a linear
+    scale factor, each dimension is multiplied by sqrt(0.5) ≈ 0.707.
+ 
+approximate_camera_matrix(capture_width, capture_height, hfov_deg, vfov_deg)
+    Builds a "camera matrix" — the set of numbers OpenCV needs to convert
+    pixel measurements into real-world distances:
+ 
+        [ fx   0   cx ]
+        [ 0    fy  cy ]
+        [ 0    0   1  ]
+ 
+        fx, fy = focal length in PIXELS (how many pixels wide a 1-meter
+                 object would appear at 1 meter away), computed from the
+                 camera's known horizontal/vertical field of view (spec
+                 sheet: 100° H x 72° V) using the pinhole camera formula:
+                     f = size / (2 * tan(FOV / 2))
+        cx, cy = optical center, assumed to be the exact middle of frame
+ 
+    NOTE: This is an APPROXIMATION derived from the camera's spec sheet
+
+
+main loop sequence:
+frame = picam2.capture_array()
+        Grabs one frame from the camera (RGB pixel array).
+ 
+    corners, ids, _ = cv2.aruco.detectMarkers(frame, aruco_dict, aruco_params)
+        Scans the frame for ArUco markers.
+        corners = pixel coordinates of each marker's 4 edges
+        ids     = which marker ID(s) were found (None if nothing detected)
+ 
+    rvecs, tvecs, _ = cv2.aruco.estimatePoseSingleMarkers(
+        corners, args.marker_size, camera_matrix, dist_coeffs
+    )
+        Converts 2D pixel corners into 3D real-world position, using the
+        marker's known physical size + the camera matrix. Returns:
+        tvecs = translation (x, y, z position in meters)
+        rvecs = rotation (orientation) — used here just to draw 3D axes
+ 
+    x, y, z = tvecs[i][0]
+    x *= args.z_correction
+    y *= args.z_correction
+    z *= args.z_correction
+        Applies the empirical correction factor (see --z-correction above)
+        before printing/displaying the result.
+ 
+    cv2.imshow(window_name, bgr)
+        Displays the annotated frame. Note: Picamera2 outputs RGB, but
+        OpenCV's display expects BGR, hence the color conversion just
+        before this line.
+'''
+
 
 import argparse
 import math
