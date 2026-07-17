@@ -1,0 +1,333 @@
+:root {
+  --surface-1:      #fcfcfb;
+  --page-plane:      #f9f9f7;
+  --text-primary:   #0b0b0b;
+  --text-secondary: #52514e;
+  --text-muted:     #898781;
+  --gridline:       #e1e0d9;
+  --border:         rgba(11,11,11,0.10);
+  --series-blue:    #2a78d6;
+
+  --status-good:     #0ca30c;
+  --status-warning:  #fab219;
+  --status-serious:  #ec835a;
+  --status-critical: #d03b3b;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --surface-1:      #1a1a19;
+    --page-plane:      #0d0d0d;
+    --text-primary:   #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted:     #898781;
+    --gridline:       #2c2c2a;
+    --border:         rgba(255,255,255,0.10);
+    --series-blue:    #3987e5;
+
+    --status-good:     #0ca30c;
+    --status-warning:  #fab219;
+    --status-serious:  #ec835a;
+    --status-critical: #d03b3b;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--page-plane);
+  color: var(--text-primary);
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 14px;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+header h1 {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 0;
+  letter-spacing: 0.02em;
+}
+
+header h1 span {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(280px, 1fr);
+  gap: 16px;
+  padding: 16px;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+@media (max-width: 860px) {
+  .layout { grid-template-columns: 1fr; }
+}
+
+.card {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px;
+}
+
+.card + .card { margin-top: 16px; }
+
+.card h2 {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  margin: 0 0 12px;
+  font-weight: 600;
+}
+
+/* ---------------- status badges ---------------- */
+
+.badges {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+}
+
+.badge .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  flex: none;
+}
+
+.badge.good .dot { background: var(--status-good); }
+.badge.warning .dot { background: var(--status-warning); }
+.badge.critical .dot { background: var(--status-critical); }
+
+/* ---------------- camera ---------------- */
+
+.video-wrap {
+  position: relative;
+  background: #000;
+  border-radius: 8px;
+  overflow: hidden;
+  aspect-ratio: 16 / 9;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.video-wrap img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.video-wrap .empty-state {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+/* ---------------- telemetry stat tiles ---------------- */
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+}
+
+.stat-tile {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.stat-tile .label {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.stat-tile .value {
+  font-size: 20px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  margin-top: 2px;
+}
+
+.stat-tile .value.na { color: var(--text-muted); font-size: 16px; }
+
+/* ---------------- meter (tilt) ---------------- */
+
+.meter-track {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--gridline);
+  overflow: hidden;
+  margin-top: 8px;
+}
+
+.meter-fill {
+  height: 100%;
+  background: var(--series-blue);
+  border-radius: 3px;
+  transition: width 0.15s ease;
+}
+
+.meter-fill.warning { background: var(--status-warning); }
+.meter-fill.critical { background: var(--status-critical); }
+
+/* ---------------- controls ---------------- */
+
+.control-row {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.dpad {
+  display: grid;
+  grid-template-columns: repeat(3, 48px);
+  grid-template-rows: repeat(2, 48px);
+  gap: 6px;
+}
+
+.dpad button {
+  font: inherit;
+  font-size: 16px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--page-plane);
+  color: var(--text-primary);
+  cursor: pointer;
+  user-select: none;
+  touch-action: none;
+}
+
+.dpad button:active,
+.dpad button.active {
+  background: var(--series-blue);
+  color: #fff;
+  border-color: var(--series-blue);
+}
+
+.dpad .fwd  { grid-column: 2; grid-row: 1; }
+.dpad .left { grid-column: 1; grid-row: 2; }
+.dpad .back { grid-column: 2; grid-row: 2; }
+.dpad .right{ grid-column: 3; grid-row: 2; }
+
+.yaw-pad {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.yaw-pad button {
+  font: inherit;
+  font-size: 13px;
+  width: 64px;
+  height: 40px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--page-plane);
+  color: var(--text-primary);
+  cursor: pointer;
+  user-select: none;
+  touch-action: none;
+}
+
+.yaw-pad button:active,
+.yaw-pad button.active {
+  background: var(--series-blue);
+  color: #fff;
+  border-color: var(--series-blue);
+}
+
+.control-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 10px;
+  line-height: 1.5;
+}
+
+.control-hint code {
+  background: var(--page-plane);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+.control-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 14px;
+  gap: 10px;
+}
+
+.watchdog {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.watchdog.tripped { color: var(--status-critical); }
+
+.arm-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.arm-buttons button {
+  font: inherit;
+  font-weight: 600;
+  font-size: 13px;
+  padding: 9px 16px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  cursor: pointer;
+}
+
+#arm-btn {
+  background: var(--status-good);
+  color: #fff;
+  border-color: var(--status-good);
+}
+
+#disarm-btn {
+  background: var(--status-critical);
+  color: #fff;
+  border-color: var(--status-critical);
+}
+
+.stick-readout {
+  display: flex;
+  gap: 14px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  margin-top: 10px;
+}

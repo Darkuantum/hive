@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>hive control</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header>
+    <h1>hive <span>recovery rig control</span></h1>
+    <div class="badges" id="badges">
+      <span class="badge" id="badge-mavlink"><span class="dot"></span>mavlink</span>
+      <span class="badge" id="badge-camera"><span class="dot"></span>camera</span>
+      <span class="badge" id="badge-armed"><span class="dot"></span>disarmed</span>
+      <span class="badge" id="badge-marker"><span class="dot"></span>no marker</span>
+    </div>
+  </header>
+
+  <div class="layout">
+    <div>
+      <div class="card">
+        <h2>Camera feed</h2>
+        <div class="video-wrap">
+          <img id="video" src="/video_feed" alt="camera feed"
+               onerror="this.style.display='none'; document.getElementById('video-empty').style.display='flex';">
+          <div class="empty-state" id="video-empty" style="display:none;">camera unavailable</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Manual thruster control</h2>
+        <div class="control-row">
+          <div class="dpad" id="dpad">
+            <button class="fwd"  data-key="w">&uarr;</button>
+            <button class="left" data-key="a">&larr;</button>
+            <button class="back" data-key="s">&darr;</button>
+            <button class="right" data-key="d">&rarr;</button>
+          </div>
+          <div class="yaw-pad" id="yawpad">
+            <button data-key="q">&#8634; yaw</button>
+            <button data-key="e">yaw &#8635;</button>
+          </div>
+        </div>
+        <div class="stick-readout" id="stick-readout">x=0.00 y=0.00 r=0.00</div>
+        <div class="control-hint">
+          Keys <code>W</code>/<code>S</code> surge, <code>A</code>/<code>D</code> sway,
+          <code>Q</code>/<code>E</code> yaw. Heave is fixed neutral (no vertical thrusters).
+          Sticks zero automatically if this page stops sending for 0.5s.
+        </div>
+        <div class="control-footer">
+          <span class="watchdog" id="watchdog">last command: --</span>
+          <div class="arm-buttons">
+            <button id="arm-btn">ARM</button>
+            <button id="disarm-btn">DISARM</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="card">
+        <h2>Pixhawk telemetry</h2>
+        <div class="stat-grid" id="telemetry-grid">
+          <div class="stat-tile"><div class="label">Roll</div><div class="value na" data-field="roll_deg">--</div></div>
+          <div class="stat-tile"><div class="label">Pitch</div><div class="value na" data-field="pitch_deg">--</div></div>
+          <div class="stat-tile"><div class="label">Yaw</div><div class="value na" data-field="yaw_deg">--</div></div>
+          <div class="stat-tile"><div class="label">Depth</div><div class="value na" data-field="depth">--</div></div>
+          <div class="stat-tile"><div class="label">Ext baro (Bar02)</div><div class="value na" data-field="pressure_abs">--</div></div>
+          <div class="stat-tile"><div class="label">Int baro (MS5611)</div><div class="value na" data-field="pressure_int">--</div></div>
+          <div class="stat-tile"><div class="label">Mode</div><div class="value na" data-field="mode">--</div></div>
+          <div class="stat-tile"><div class="label">Servo PWM 1-4</div><div class="value na" data-field="servo">--</div></div>
+        </div>
+        <div>
+          <div class="label" style="font-size:11px; color:var(--text-muted); text-transform:uppercase; margin-top:14px;">Tilt from level</div>
+          <div class="meter-track"><div class="meter-fill" id="tilt-fill" style="width:0%"></div></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Marker pose (camera frame)</h2>
+        <div class="stat-grid" id="pose-grid">
+          <div class="stat-tile"><div class="label">x</div><div class="value na" data-field="x">--</div></div>
+          <div class="stat-tile"><div class="label">y</div><div class="value na" data-field="y">--</div></div>
+          <div class="stat-tile"><div class="label">z</div><div class="value na" data-field="z">--</div></div>
+          <div class="stat-tile"><div class="label">yaw</div><div class="value na" data-field="yaw">--</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
