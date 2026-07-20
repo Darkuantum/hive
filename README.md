@@ -47,7 +47,7 @@ controller board.
   ICM-20948 IMU     -- attitude/heading ---+--> state --> PID per axis --> thrust --> PCA9685 --> 4x AM32 --> 4x T500
   (I2C 0x68/0x69)      rate, mag fusion     |   estimate  (surge, sway,   allocation  (PWM)       ESC        thruster
                                             |             heave, yaw)     matrix
-  MS5837-30BA depth -- depth ---------------+                                          |
+  Bar02 (MS5837-02BA) depth -- depth ---------------+                                          |
   (I2C 0x76)                                                                              |
                                                                                          v
                                                                           fail-to-stop watchdog:
@@ -70,7 +70,7 @@ controller board.
 |---|---|---|
 | PCA9685 | `0x40` | PWM to the four ESCs |
 | ICM-20948 | `0x68` or `0x69` | 9-DoF attitude and heading |
-| MS5837-30BA | `0x76` | Depth (bare board, team-potted and calibrated) |
+| Bar02 (MS5837-02BA) | `0x76` | Depth (sealed unit from Blue Robotics) |
 
 Bring-up check: `i2cdetect -y 1` must show `0x40`, `0x68`/`0x69`, and `0x76`.
 
