@@ -81,6 +81,10 @@ VEL_LEAK     = 0.5     # 1/s leak (bounds accelerometer drift)
 ACCEL_LPF_HZ = 5.0     # low-pass on accelerometer (kills vibration)
 ACCEL_DEADBAND = 0.05  # m/s^2 noise floor ignored
 
+ACCEL_CAL_SECONDS = 3.0  # stationary accel bias capture, done before arming
+
+ARM_TIMEOUT_S = 10.0     # give up (rather than block forever) if PreArm checks fail
+
 # =====================================================================
 # CONTROLLERS
 # =====================================================================
@@ -174,6 +178,35 @@ def connect_pixhawk():
             msg_id, interval_us, 0, 0, 0, 0, 0)
     return m
 
+def calibrate_accel_bias(m, duration_s=ACCEL_CAL_SECONDS):
+    """
+    A stationary IMU still reads a nonzero constant xacc/yacc (mounting tilt,
+    sensor offset). Left uncorrected, VelocityDamper's leaky integrator can't
+    fully cancel a sustained bias, so the estimated velocity -- and the
+    opposing effort -- ramps to the output limit and pins there instead of
+    resting near zero. Average N samples here (frame held still, pre-arm) and
+    subtract the result from every accel reading afterward.
+    """
+    print(f"[CAL] Sampling accel bias for {duration_s:.1f}s -- keep the frame still...")
+    sum_ax = sum_ay = 0.0
+    n = 0
+    deadline = time.monotonic() + duration_s
+    while time.monotonic() < deadline:
+        msg = m.recv_match(type=["SCALED_IMU2", "RAW_IMU"], blocking=True, timeout=0.2)
+        if msg is None:
+            continue
+        sum_ax += msg.xacc * 9.80665 / 1000.0
+        sum_ay += msg.yacc * 9.80665 / 1000.0
+        n += 1
+
+    if n == 0:
+        print("[CAL] No IMU samples received -- skipping bias correction (bias=0).")
+        return 0.0, 0.0
+
+    ax_bias, ay_bias = sum_ax / n, sum_ay / n
+    print(f"[CAL] Bias captured from {n} samples: ax={ax_bias:+.4f} ay={ay_bias:+.4f} m/s^2")
+    return ax_bias, ay_bias
+
 def set_mode_manual(m):
     print("[MAV] Setting MANUAL mode...")
     m.mav.command_long_send(
@@ -183,14 +216,33 @@ def set_mode_manual(m):
         ARDUSUB_MODE_MANUAL, 0, 0, 0, 0, 0)
     time.sleep(1)
 
-def arm(m):
+def arm(m, timeout_s=ARM_TIMEOUT_S):
+    """
+    Waits for an ARMED heartbeat with a bounded timeout instead of blocking
+    forever, and prints any STATUSTEXT along the way -- that's where ArduSub
+    reports *why* a PreArm check refused (EKF, safety switch, RC failsafe...).
+    Returns True once armed, False on timeout.
+    """
     print("[MAV] Arming...")
     m.mav.command_long_send(
         m.target_system, m.target_component,
         mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM, 0,
         1, 0, 0, 0, 0, 0, 0)
-    m.motors_armed_wait()
-    print("[MAV] Armed.")
+
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        msg = m.recv_match(type=["HEARTBEAT", "STATUSTEXT"], blocking=True, timeout=0.5)
+        if msg is None:
+            continue
+        mtype = msg.get_type()
+        if mtype == "STATUSTEXT":
+            print(f"[FC] {msg.text}")
+        elif mtype == "HEARTBEAT" and msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED:
+            print("[MAV] Armed.")
+            return True
+
+    print("[MAV] Arm timed out -- vehicle never reported ARMED. See [FC] messages above.")
+    return False
 
 def disarm(m):
     try:
@@ -234,8 +286,11 @@ def main():
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
 
+    ax_bias, ay_bias = calibrate_accel_bias(master)
+
     set_mode_manual(master)
-    arm(master)
+    if not arm(master):
+        sys.exit(1)
 
     yaw_pid  = PID(YAW_KP, YAW_KI, YAW_KD, MAX_YAW_EFFORT)
     x_damper = VelocityDamper(MAX_X_EFFORT)
@@ -269,8 +324,8 @@ def main():
                 yaw_target = yaw_deg
                 print(f"[YAW] Heading captured: {yaw_target:.1f} deg")
         elif mtype in ("SCALED_IMU2", "RAW_IMU"):
-            ax = msg.xacc * 9.80665 / 1000.0   # mG -> m/s^2, body forward
-            ay = msg.yacc * 9.80665 / 1000.0   # body starboard
+            ax = msg.xacc * 9.80665 / 1000.0 - ax_bias   # mG -> m/s^2, body forward
+            ay = msg.yacc * 9.80665 / 1000.0 - ay_bias   # body starboard
             continue                            # run control only on ATTITUDE
 
         if yaw_deg is None or yaw_target is None:
