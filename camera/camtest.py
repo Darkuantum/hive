@@ -32,6 +32,11 @@ DARK-CONDITION TUNING:
     2. DETECTION PREPROCESSING -- --underwater-tuning (CLAHE contrast
        enhancement + bilateral denoise + widened ArUco threshold params),
        independent of exposure. --clahe-clip tunes CLAHE's aggressiveness.
+       Press 'v' while running to toggle the preview between the RAW feed
+       (what your eyes see) and the PROCESSED feed (what detectMarkers()
+       actually sees) -- useful when detection succeeds but the marker
+       doesn't look obviously visible in the normal view; the detector may
+       be working from a cleaned-up version you're not looking at.
   Test these ONE AT A TIME (e.g. adjust exposure/gain with underwater-tuning
   OFF, then default AE with underwater-tuning ON) so you know which knob is
   actually responsible for any improvement you see.
@@ -262,7 +267,8 @@ def main():
           f"angle_deg={args.angle_deg} lateral_pct={args.lateral_pct} "
           f"underwater_tuning={args.underwater_tuning}")
     print("Controls: SPACE = log trial | n = force-log as NOT detected | "
-          "e/d = exposure up/down | g/f = gain up/down | a = toggle auto-exposure | q = quit")
+          "e/d = exposure up/down | g/f = gain up/down | a = toggle auto-exposure | "
+          "v = toggle raw/processed view | q = quit")
 
     window_name = "ArUco Test Harness"
     if not args.no_preview:
@@ -298,6 +304,11 @@ def main():
     def apply_auto_controls():
         picam2.set_controls({"AeEnable": True})
 
+    # --- debug view toggle: watch the raw feed, or what the detector actually sees ---
+    view_processed = False  # False = raw camera feed (what your eyes see normally)
+                             # True  = the CLAHE/bilateral-processed image handed to detectMarkers
+                             #         (only meaningfully different when --underwater-tuning is on)
+
     if not ae_enabled:
         apply_manual_controls()
         time.sleep(0.5)  # let manual settings actually take effect before capturing
@@ -317,7 +328,13 @@ def main():
             detected = ids is not None
             marker_id, x, y, z = None, None, None, None
 
-            display = frame.copy()
+            if view_processed and args.underwater_tuning:
+                # detect_input is grayscale here -- convert back to 3-channel so the
+                # colored marker/axis overlays below still render in color on top of it
+                display = cv2.cvtColor(detect_input, cv2.COLOR_GRAY2RGB)
+            else:
+                display = frame.copy()
+
             if detected:
                 cv2.aruco.drawDetectedMarkers(display, corners, ids)
                 rvecs, tvecs, _ = cv2.aruco.estimatePoseSingleMarkers(
@@ -353,6 +370,10 @@ def main():
             ae_label = "AUTO-EXPOSURE" if ae_enabled else f"MANUAL exp={current_exposure:.0f}us gain={current_gain:.1f}"
             cv2.putText(display, ae_label, (20, 135),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 200, 255), 2)
+            view_label = "VIEW: PROCESSED (what detector sees)" if (view_processed and args.underwater_tuning) \
+                else "VIEW: RAW"
+            cv2.putText(display, view_label, (20, 165),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (180, 180, 255), 2)
 
             if flash_text and (time.time() - last_flash_time) < 1.0:
                 cv2.putText(display, flash_text, (20, args.height - 30),
@@ -366,7 +387,7 @@ def main():
                     ord(" "): " ", ord("n"): "n", ord("q"): "q",
                     ord("e"): "e+", ord("d"): "e-",
                     ord("g"): "g+", ord("f"): "g-",
-                    ord("a"): "a",
+                    ord("a"): "a", ord("v"): "v",
                 }
                 cmd = key_map.get(raw_key)
             else:
@@ -428,6 +449,14 @@ def main():
                 else:
                     apply_manual_controls()
                     print(f"\nAuto-exposure: OFF -- locked to exp={current_exposure}us gain={current_gain:.1f}")
+
+            elif cmd == "v":
+                if not args.underwater_tuning:
+                    print("\n'v' toggle has nothing to show -- --underwater-tuning is off, "
+                          "so there's no separate processed image (raw and processed are identical)")
+                else:
+                    view_processed = not view_processed
+                    print(f"\nView: {'PROCESSED (what the detector sees)' if view_processed else 'RAW'}")
 
             elif cmd in ("e+", "e-", "g+", "g-"):
                 if ae_enabled:
