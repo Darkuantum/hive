@@ -15,6 +15,23 @@ WHY A KEYPRESS-DRIVEN TRIAL MODEL, NOT AUTO-LOGGING EVERY FRAME:
   every time you press a key, so your CSV row count == your actual trial
   count, and failures are captured.
 
+DARK-CONDITION TUNING (new):
+  Two independent things can be tuned when testing low light, and this
+  script now lets you isolate which one is doing the work:
+    1. EXPOSURE/GAIN -- how the sensor captures the frame. By default
+       auto-exposure (AE) picks these for you, and you can't see what it
+       chose until after you log a trial. Now the live preview shows
+       ExposureTime/AnalogueGain/Lux on screen every frame, and you can
+       override AE entirely with --manual-exposure / --manual-gain to
+       test fixed values instead of trusting AE's guess.
+    2. DETECTION PREPROCESSING -- --underwater-tuning (CLAHE contrast
+       enhancement + bilateral denoise + widened ArUco threshold params),
+       independent of exposure. --clahe-clip lets you tune CLAHE's
+       aggressiveness without editing code.
+  Test these ONE AT A TIME (e.g. manual exposure with underwater-tuning
+  OFF, then default AE with underwater-tuning ON) so you know which
+  knob is actually responsible for any improvement you see.
+
 USAGE:
   python3 camTest.py --condition-label "clear_20cm" --distance-cm 20 \
       --csv results/exp1_range.csv
@@ -25,31 +42,33 @@ USAGE:
       (records Detected=Y with pose, or Detected=N if nothing is in frame)
     - press 'n' to force-log a trial as Detected=N even if something WAS
       detected (e.g. you judge it a false positive -- wrong ID, garbage pose)
-    - press 'u' to log the last few frames' exposure/gain/lux metadata
-      (see LOGGING LIGHTING CONDITIONS below)
     - press 'q' to quit
 
-  Change --condition-label / --distance-cm / --angle-deg / --lateral-pct /
-  --lux for each new block of trials, or just edit the CSV's condition
-  columns after the fact -- whichever is less friction on the day.
+  Change --condition-label / --distance-cm / --angle-deg / --lateral-pct
+  for each new block of trials, or just edit the CSV's condition columns
+  after the fact -- whichever is less friction on the day.
 
 LOGGING LIGHTING CONDITIONS:
   Picamera2/libcamera estimates lux as part of its own auto-exposure
   algorithm. Every logged trial also records ExposureTime, AnalogueGain,
   and Lux from capture_metadata() at the moment you pressed the key, so
   you get a lighting readout for free, time-aligned with the trial --
-  no separate lux meter required unless you want a cross-check.
+  no separate lux meter required unless you want a cross-check. These
+  are now also shown live on screen every frame, not just at log time.
 
 CSV COLUMNS:
   timestamp, condition_label, distance_cm, angle_deg, lateral_pct,
   detected, marker_id, x_m, y_m, z_m, exposure_us, analogue_gain, lux,
-  underwater_tuning, notes
+  manual_exposure, manual_gain, underwater_tuning, notes
 """
 
 import argparse
 import csv
 import math
 import os
+import queue
+import sys
+import threading
 import time
 from datetime import datetime
 
@@ -74,7 +93,7 @@ CSV_FIELDS = [
     "timestamp", "condition_label", "distance_cm", "angle_deg", "lateral_pct",
     "detected", "marker_id", "x_m", "y_m", "z_m",
     "exposure_us", "analogue_gain", "lux",
-    "underwater_tuning", "notes",
+    "manual_exposure", "manual_gain", "underwater_tuning", "notes",
 ]
 
 
@@ -114,10 +133,10 @@ def build_aruco_params(underwater_tuning):
     return params
 
 
-def preprocess_underwater(frame_rgb):
+def preprocess_underwater(frame_rgb, clip_limit=3.0):
     """CLAHE contrast enhancement + edge-preserving denoise, then to grayscale."""
     gray = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2GRAY)
-    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+    clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(8, 8))
     enhanced = clahe.apply(gray)
     denoised = cv2.bilateralFilter(enhanced, d=5, sigmaColor=50, sigmaSpace=50)
     return denoised
@@ -132,6 +151,44 @@ def ensure_csv(path):
         writer.writeheader()
         f.flush()
     return f, writer
+
+
+def start_stdin_listener():
+    """
+    Headless (--no-preview) key capture.
+
+    cv2.waitKey() only reads keys when the OpenCV preview WINDOW has focus,
+    so it does nothing over SSH / with no display. This runs a background
+    thread that blocks on stdin.readline() (via `input()`) and pushes
+    whatever you typed into a thread-safe queue, which the main loop polls
+    without blocking on it. daemon=True so it doesn't keep the process
+    alive after the main loop exits.
+    """
+    q = queue.Queue()
+
+    def _reader():
+        print("(headless mode) Type a command + Enter: "
+              "space/s = log trial | n = force NOT-detected | q = quit")
+        while True:
+            try:
+                line = input()
+            except EOFError:
+                q.put("q")
+                break
+            cmd = line.strip().lower()
+            if cmd in ("", "space", "s"):
+                q.put(" ")
+            elif cmd == "n":
+                q.put("n")
+            elif cmd == "q":
+                q.put("q")
+                break
+            else:
+                print(f"  (unrecognized input '{line}' -- use space/s, n, or q)")
+
+    t = threading.Thread(target=_reader, daemon=True)
+    t.start()
+    return q
 
 
 def main():
@@ -149,6 +206,16 @@ def main():
                          help="Empirical multiplier on x,y,z (see camFinal.py notes)")
     parser.add_argument("--underwater-tuning", action="store_true",
                          help="Enable CLAHE+bilateral preprocessing and tuned ArUco params")
+    parser.add_argument("--clahe-clip", type=float, default=3.0,
+                         help="CLAHE clipLimit for --underwater-tuning (default 3.0). "
+                              "Higher = more contrast boost, but amplifies noise/turbidity graininess too.")
+    parser.add_argument("--manual-exposure", type=int, default=None,
+                         help="Lock exposure time in microseconds (disables auto-exposure). "
+                              "Use with --manual-gain to fully control the sensor for dark-condition "
+                              "tuning tests instead of trusting AE's guess. e.g. 20000 = 20ms")
+    parser.add_argument("--manual-gain", type=float, default=None,
+                         help="Lock analogue gain (disables auto-exposure). Typical range ~1.0-16.0 "
+                              "depending on sensor; higher = brighter but noisier. Used with --manual-exposure.")
     parser.add_argument("--no-preview", action="store_true")
 
     # --- experiment/trial labeling ---
@@ -172,6 +239,18 @@ def main():
     picam2.start()
     time.sleep(1)
 
+    if args.manual_exposure is not None or args.manual_gain is not None:
+        controls = {"AeEnable": False}
+        if args.manual_exposure is not None:
+            controls["ExposureTime"] = args.manual_exposure
+        if args.manual_gain is not None:
+            controls["AnalogueGain"] = args.manual_gain
+        picam2.set_controls(controls)
+        print(f"Manual exposure control ON: AE disabled, "
+              f"ExposureTime={args.manual_exposure} AnalogueGain={args.manual_gain} "
+              f"(unset value keeps whatever AE last converged to)")
+        time.sleep(0.5)  # let the manual settings actually take effect before capturing
+
     aruco_dict = cv2.aruco.Dictionary_get(ARUCO_DICTS[args.dict])
     aruco_params = build_aruco_params(args.underwater_tuning)
 
@@ -190,22 +269,28 @@ def main():
           f"angle_deg={args.angle_deg} lateral_pct={args.lateral_pct} "
           f"underwater_tuning={args.underwater_tuning}")
     print("Controls: SPACE = log trial (auto Y/N) | n = force-log as NOT detected | q = quit")
+    if args.manual_exposure is None and args.manual_gain is None:
+        print("Tip: exposure/gain/lux are shown live on screen. To test whether dark performance is "
+              "tunable, try --manual-exposure/--manual-gain to lock values instead of trusting auto-exposure.")
 
     window_name = "ArUco Test Harness"
     if not args.no_preview:
         cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
         cv2.resizeWindow(window_name, args.width, args.height)
+    else:
+        stdin_queue = start_stdin_listener()
 
     trial_count = 0
     last_flash_time = 0.0
     flash_text = ""
+    last_status_print = 0.0
 
     try:
         while True:
             frame = picam2.capture_array()  # RGB888
 
             if args.underwater_tuning:
-                detect_input = preprocess_underwater(frame)
+                detect_input = preprocess_underwater(frame, clip_limit=args.clahe_clip)
             else:
                 detect_input = frame
 
@@ -233,8 +318,20 @@ def main():
                 cv2.putText(display, "NOT DETECTED", (20, 40),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
 
+            # Live exposure/gain/lux readout every frame -- this is the actual
+            # fix for "can't tell what auto-exposure is doing until after I
+            # log a trial". Cheap enough to call every frame for a diagnostic
+            # tool (not meant to run this way in the final deployed system).
+            live_meta = picam2.capture_metadata()
+            live_exposure = live_meta.get("ExposureTime", "?")
+            live_gain = live_meta.get("AnalogueGain", "?")
+            live_lux = live_meta.get("Lux", "?")
+            meta_text = f"exp={live_exposure}us gain={live_gain} lux={live_lux}"
+
             cv2.putText(display, f"trials logged: {trial_count}", (20, 75),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+            cv2.putText(display, meta_text, (20, 105),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 180, 0), 2)
 
             if flash_text and (time.time() - last_flash_time) < 1.0:
                 cv2.putText(display, flash_text, (20, args.height - 30),
@@ -245,14 +342,29 @@ def main():
                 cv2.imshow(window_name, bgr)
                 key = cv2.waitKey(1) & 0xFF
             else:
-                key = -1
+                # Non-blocking check of whatever the stdin listener thread
+                # has queued up since the last frame -- keeps the capture
+                # loop running at full speed instead of blocking on input().
+                try:
+                    cmd = stdin_queue.get_nowait()
+                    key = ord(cmd) if cmd != " " else ord(" ")
+                except queue.Empty:
+                    key = -1
+                # print a live status line a couple times a second since
+                # there's no preview window to look at
+                if time.time() - last_status_print >= 0.5:
+                    status = f"id={marker_id} z={z:.3f}m" if detected else "NOT DETECTED"
+                    print(f"\rlive: {status}  {meta_text}   (trials logged: {trial_count})   ",
+                          end="", flush=True)
+                    last_status_print = time.time()
 
             if key == ord("q"):
                 break
 
             if key == ord(" ") or key == ord("n"):
                 force_not_detected = (key == ord("n"))
-                meta = picam2.capture_metadata()
+                meta = live_meta  # reuse this frame's metadata (already captured above) so the
+                                   # logged row matches exactly what was on screen when you pressed the key
                 row = {
                     "timestamp": datetime.now().isoformat(timespec="seconds"),
                     "condition_label": args.condition_label,
@@ -267,6 +379,8 @@ def main():
                     "exposure_us": meta.get("ExposureTime", ""),
                     "analogue_gain": meta.get("AnalogueGain", ""),
                     "lux": meta.get("Lux", ""),
+                    "manual_exposure": args.manual_exposure if args.manual_exposure is not None else "",
+                    "manual_gain": args.manual_gain if args.manual_gain is not None else "",
                     "underwater_tuning": args.underwater_tuning,
                     "notes": "forced N (false positive override)" if force_not_detected else "",
                 }
