@@ -15,22 +15,26 @@ WHY A KEYPRESS-DRIVEN TRIAL MODEL, NOT AUTO-LOGGING EVERY FRAME:
   every time you press a key, so your CSV row count == your actual trial
   count, and failures are captured.
 
-DARK-CONDITION TUNING (new):
+DARK-CONDITION TUNING:
   Two independent things can be tuned when testing low light, and this
-  script now lets you isolate which one is doing the work:
-    1. EXPOSURE/GAIN -- how the sensor captures the frame. By default
-       auto-exposure (AE) picks these for you, and you can't see what it
-       chose until after you log a trial. Now the live preview shows
-       ExposureTime/AnalogueGain/Lux on screen every frame, and you can
-       override AE entirely with --manual-exposure / --manual-gain to
-       test fixed values instead of trusting AE's guess.
+  script lets you isolate which one is doing the work:
+    1. EXPOSURE/GAIN -- how the sensor captures the frame. Shown live on
+       screen every frame (ExposureTime/AnalogueGain/Lux). Adjust it WHILE
+       RUNNING with:
+         e / d = exposure up / down (x1.25 per press)
+         g / f = gain up / down (+/-1.0 per press)
+         a     = toggle auto-exposure on/off
+       Pressing e/d/g/f automatically switches off auto-exposure the first
+       time (can't nudge a value AE is also trying to control). Press 'a'
+       to hand control back to auto-exposure at any time.
+       --manual-exposure / --manual-gain still work as before, to start
+       the script already in manual mode with a chosen starting point.
     2. DETECTION PREPROCESSING -- --underwater-tuning (CLAHE contrast
        enhancement + bilateral denoise + widened ArUco threshold params),
-       independent of exposure. --clahe-clip lets you tune CLAHE's
-       aggressiveness without editing code.
-  Test these ONE AT A TIME (e.g. manual exposure with underwater-tuning
-  OFF, then default AE with underwater-tuning ON) so you know which
-  knob is actually responsible for any improvement you see.
+       independent of exposure. --clahe-clip tunes CLAHE's aggressiveness.
+  Test these ONE AT A TIME (e.g. adjust exposure/gain with underwater-tuning
+  OFF, then default AE with underwater-tuning ON) so you know which knob is
+  actually responsible for any improvement you see.
 
 USAGE:
   python3 camTest.py --condition-label "clear_20cm" --distance-cm 20 \
@@ -38,6 +42,8 @@ USAGE:
 
   Then, for each trial:
     - position the marker as required for that trial
+    - (optional) press e/d/g/f to tune exposure/gain, watching the live
+      overlay, until detection looks best
     - press SPACE to log a trial using whatever the camera currently sees
       (records Detected=Y with pose, or Detected=N if nothing is in frame)
     - press 'n' to force-log a trial as Detected=N even if something WAS
@@ -167,8 +173,8 @@ def start_stdin_listener():
     q = queue.Queue()
 
     def _reader():
-        print("(headless mode) Type a command + Enter: "
-              "space/s = log trial | n = force NOT-detected | q = quit")
+        print("(headless mode) Type a command + Enter: space/s = log trial | n = force NOT-detected | "
+              "e+/e- = exposure up/down | g+/g- = gain up/down | a = toggle auto-exposure | q = quit")
         while True:
             try:
                 line = input()
@@ -178,13 +184,12 @@ def start_stdin_listener():
             cmd = line.strip().lower()
             if cmd in ("", "space", "s"):
                 q.put(" ")
-            elif cmd == "n":
-                q.put("n")
-            elif cmd == "q":
-                q.put("q")
-                break
+            elif cmd in ("n", "e+", "e-", "g+", "g-", "a", "q"):
+                q.put(cmd)
+                if cmd == "q":
+                    break
             else:
-                print(f"  (unrecognized input '{line}' -- use space/s, n, or q)")
+                print(f"  (unrecognized input '{line}' -- use space/s, n, e+/e-, g+/g-, a, or q)")
 
     t = threading.Thread(target=_reader, daemon=True)
     t.start()
@@ -239,18 +244,6 @@ def main():
     picam2.start()
     time.sleep(1)
 
-    if args.manual_exposure is not None or args.manual_gain is not None:
-        controls = {"AeEnable": False}
-        if args.manual_exposure is not None:
-            controls["ExposureTime"] = args.manual_exposure
-        if args.manual_gain is not None:
-            controls["AnalogueGain"] = args.manual_gain
-        picam2.set_controls(controls)
-        print(f"Manual exposure control ON: AE disabled, "
-              f"ExposureTime={args.manual_exposure} AnalogueGain={args.manual_gain} "
-              f"(unset value keeps whatever AE last converged to)")
-        time.sleep(0.5)  # let the manual settings actually take effect before capturing
-
     aruco_dict = cv2.aruco.Dictionary_get(ARUCO_DICTS[args.dict])
     aruco_params = build_aruco_params(args.underwater_tuning)
 
@@ -268,10 +261,8 @@ def main():
     print(f"Condition: label='{args.condition_label}' distance_cm={args.distance_cm} "
           f"angle_deg={args.angle_deg} lateral_pct={args.lateral_pct} "
           f"underwater_tuning={args.underwater_tuning}")
-    print("Controls: SPACE = log trial (auto Y/N) | n = force-log as NOT detected | q = quit")
-    if args.manual_exposure is None and args.manual_gain is None:
-        print("Tip: exposure/gain/lux are shown live on screen. To test whether dark performance is "
-              "tunable, try --manual-exposure/--manual-gain to lock values instead of trusting auto-exposure.")
+    print("Controls: SPACE = log trial | n = force-log as NOT detected | "
+          "e/d = exposure up/down | g/f = gain up/down | a = toggle auto-exposure | q = quit")
 
     window_name = "ArUco Test Harness"
     if not args.no_preview:
@@ -284,6 +275,33 @@ def main():
     last_flash_time = 0.0
     flash_text = ""
     last_status_print = 0.0
+
+    # --- live exposure/gain state, adjustable with keypresses while running ---
+    ae_enabled = not (args.manual_exposure is not None or args.manual_gain is not None)
+    # seed the working values from --manual-* if given, otherwise from a sane starting point
+    # (only used once you press 'a' to turn AE off, or e/g to nudge values -- while ae_enabled
+    # is True these aren't applied, they're just held ready)
+    current_exposure = args.manual_exposure if args.manual_exposure is not None else 10000  # 10ms
+    current_gain = args.manual_gain if args.manual_gain is not None else 4.0
+    EXPOSURE_STEP_FACTOR = 1.25   # multiplicative step, so it scales sensibly at any exposure level
+    GAIN_STEP = 1.0
+    EXPOSURE_MIN, EXPOSURE_MAX = 100, 1_000_000   # 0.1ms to 1s, sane sensor bounds
+    GAIN_MIN, GAIN_MAX = 1.0, 16.0                 # typical AnalogueGain range for this sensor
+
+    def apply_manual_controls():
+        picam2.set_controls({
+            "AeEnable": False,
+            "ExposureTime": int(current_exposure),
+            "AnalogueGain": current_gain,
+        })
+
+    def apply_auto_controls():
+        picam2.set_controls({"AeEnable": True})
+
+    if not ae_enabled:
+        apply_manual_controls()
+        time.sleep(0.5)  # let manual settings actually take effect before capturing
+        print(f"Manual exposure control ON: ExposureTime={current_exposure}us AnalogueGain={current_gain}")
 
     try:
         while True:
@@ -332,6 +350,9 @@ def main():
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
             cv2.putText(display, meta_text, (20, 105),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 180, 0), 2)
+            ae_label = "AUTO-EXPOSURE" if ae_enabled else f"MANUAL exp={current_exposure:.0f}us gain={current_gain:.1f}"
+            cv2.putText(display, ae_label, (20, 135),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 200, 255), 2)
 
             if flash_text and (time.time() - last_flash_time) < 1.0:
                 cv2.putText(display, flash_text, (20, args.height - 30),
@@ -340,31 +361,39 @@ def main():
             if not args.no_preview:
                 bgr = cv2.cvtColor(display, cv2.COLOR_RGB2BGR)
                 cv2.imshow(window_name, bgr)
-                key = cv2.waitKey(1) & 0xFF
+                raw_key = cv2.waitKey(1) & 0xFF
+                key_map = {
+                    ord(" "): " ", ord("n"): "n", ord("q"): "q",
+                    ord("e"): "e+", ord("d"): "e-",
+                    ord("g"): "g+", ord("f"): "g-",
+                    ord("a"): "a",
+                }
+                cmd = key_map.get(raw_key)
             else:
                 # Non-blocking check of whatever the stdin listener thread
                 # has queued up since the last frame -- keeps the capture
                 # loop running at full speed instead of blocking on input().
                 try:
                     cmd = stdin_queue.get_nowait()
-                    key = ord(cmd) if cmd != " " else ord(" ")
                 except queue.Empty:
-                    key = -1
+                    cmd = None
                 # print a live status line a couple times a second since
                 # there's no preview window to look at
                 if time.time() - last_status_print >= 0.5:
                     status = f"id={marker_id} z={z:.3f}m" if detected else "NOT DETECTED"
-                    print(f"\rlive: {status}  {meta_text}   (trials logged: {trial_count})   ",
+                    ae_status = "AUTO" if ae_enabled else f"MANUAL(exp={current_exposure}us gain={current_gain:.1f})"
+                    print(f"\rlive: {status}  {meta_text}  [{ae_status}]   (trials logged: {trial_count})   ",
                           end="", flush=True)
                     last_status_print = time.time()
 
-            if key == ord("q"):
+            # --- dispatch ---
+            if cmd == "q":
                 break
 
-            if key == ord(" ") or key == ord("n"):
-                force_not_detected = (key == ord("n"))
-                meta = live_meta  # reuse this frame's metadata (already captured above) so the
-                                   # logged row matches exactly what was on screen when you pressed the key
+            elif cmd in (" ", "n"):
+                force_not_detected = (cmd == "n")
+                meta = live_meta  # reuse this frame's metadata so the logged row matches
+                                   # exactly what was on screen when you pressed the key
                 row = {
                     "timestamp": datetime.now().isoformat(timespec="seconds"),
                     "condition_label": args.condition_label,
@@ -379,8 +408,8 @@ def main():
                     "exposure_us": meta.get("ExposureTime", ""),
                     "analogue_gain": meta.get("AnalogueGain", ""),
                     "lux": meta.get("Lux", ""),
-                    "manual_exposure": args.manual_exposure if args.manual_exposure is not None else "",
-                    "manual_gain": args.manual_gain if args.manual_gain is not None else "",
+                    "manual_exposure": "" if ae_enabled else current_exposure,
+                    "manual_gain": "" if ae_enabled else current_gain,
                     "underwater_tuning": args.underwater_tuning,
                     "notes": "forced N (false positive override)" if force_not_detected else "",
                 }
@@ -390,6 +419,32 @@ def main():
                 flash_text = f"logged trial {trial_count}: {row['detected']}"
                 last_flash_time = time.time()
                 print(f"  trial {trial_count}: {row}")
+
+            elif cmd == "a":
+                ae_enabled = not ae_enabled
+                if ae_enabled:
+                    apply_auto_controls()
+                    print("\nAuto-exposure: ON")
+                else:
+                    apply_manual_controls()
+                    print(f"\nAuto-exposure: OFF -- locked to exp={current_exposure}us gain={current_gain:.1f}")
+
+            elif cmd in ("e+", "e-", "g+", "g-"):
+                if ae_enabled:
+                    # switching to manual the moment you try to nudge a value --
+                    # adjusting a value only makes sense once AE is out of the way
+                    ae_enabled = False
+                    print("\nAuto-exposure disabled automatically (you adjusted a value manually)")
+                if cmd == "e+":
+                    current_exposure = min(current_exposure * EXPOSURE_STEP_FACTOR, EXPOSURE_MAX)
+                elif cmd == "e-":
+                    current_exposure = max(current_exposure / EXPOSURE_STEP_FACTOR, EXPOSURE_MIN)
+                elif cmd == "g+":
+                    current_gain = min(current_gain + GAIN_STEP, GAIN_MAX)
+                elif cmd == "g-":
+                    current_gain = max(current_gain - GAIN_STEP, GAIN_MIN)
+                apply_manual_controls()
+                print(f"\nexposure={current_exposure:.0f}us  gain={current_gain:.1f}")
 
     except KeyboardInterrupt:
         pass
