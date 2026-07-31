@@ -46,13 +46,16 @@ _INTEGRATION_DIR = os.path.abspath(os.path.join(_THIS_DIR, '..', 'integration'))
 if _INTEGRATION_DIR not in sys.path:
     sys.path.insert(0, _INTEGRATION_DIR)
 
+import math
+
 from mavlink_interface import MavlinkInterface  # noqa: E402
-from pose_controller import PoseController       # noqa: E402
+from pose_controller import PoseController, camera_to_body_yaw  # noqa: E402
 from decision_engine import DecisionEngine       # noqa: E402
 
 CONTROL_TIMEOUT_S = 0.5    # manual mode only: zero sticks if nothing posted for this long
 CONTROL_RATE_HZ = 10
 CAMERA_JPEG_QUALITY = 80
+DEFAULT_MANUAL_POWER = 1.0  # 100% -- manual-mode thruster scale, resets here on every connect
 
 VALID_MODES = ('manual', 'auto')
 
@@ -92,6 +95,12 @@ class HardwareManager:
         # ---- manual mode state ----
         self._control = {'x': 0.0, 'y': 0.0, 'r': 0.0}
         self._control_updated_at = 0.0
+        # 0.0-1.0 scale applied to x/y/r before they're sent, manual mode
+        # only -- lets you cap thruster output (e.g. 0.5 = 50% power) for
+        # fine positioning near the marker or safer bench testing.
+        # Enforced here server-side, not just in the UI, so a stale page
+        # or a bypassed slider can't push more power than intended.
+        self._manual_power = DEFAULT_MANUAL_POWER
 
         # ---- mode + auto mode state ----
         self._mode = 'manual'
@@ -101,6 +110,7 @@ class HardwareManager:
             'state': self.engine.state.name,
             'controlling': False,
             'stick': {'x': 0.0, 'y': 0.0, 'r': 0.0},
+            'yaw_debug': None,
         }
         self._last_auto_time = None  # for dt -- set on first auto compute
 
@@ -165,6 +175,7 @@ class HardwareManager:
                     'state': self.engine.state.name,
                     'controlling': False,
                     'stick': {'x': 0.0, 'y': 0.0, 'r': 0.0},
+                    'yaw_debug': None,
                 }
 
     def get_control_mode(self):
@@ -222,7 +233,12 @@ class HardwareManager:
             age = time.time() - self._control_updated_at
             if age > CONTROL_TIMEOUT_S:
                 return 0.0, 0.0, 0.0
-            return self._control['x'], self._control['y'], self._control['r']
+            power = self._manual_power
+            return (
+                self._control['x'] * power,
+                self._control['y'] * power,
+                self._control['r'] * power,
+            )
 
     def _compute_auto_control(self):
         """Runs the same logic as pixhawk_camera_test.py's main loop --
@@ -245,6 +261,20 @@ class HardwareManager:
         else:
             state = self.engine.update(False)
 
+        # Calibration debug: camera-frame yaw vs. what CAMERA_MOUNT_YAW_DEG
+        # turns it into, regardless of whether the engine is currently
+        # controlling. This is what lets CAMERA_MOUNT_YAW_DEG in
+        # pose_controller.py be verified live from the web UI on a
+        # headless rig, instead of needing `camFinal.py --calibration-check`
+        # (which needs a monitor attached to the Pi for its cv2 window).
+        yaw_debug = None
+        if marker_detected:
+            yaw_body_now = camera_to_body_yaw(pose['yaw'])
+            yaw_debug = {
+                'yaw_cam_deg': math.degrees(pose['yaw']),
+                'yaw_body_deg': math.degrees(yaw_body_now),
+            }
+
         if self.engine.is_controlling() and marker_detected:
             vx, vy, yaw_rate = self.controller.compute(
                 pose['x'], pose['y'], pose['z'], pose['yaw'], dt
@@ -252,6 +282,13 @@ class HardwareManager:
             x = vx / self.controller.pid_surge.output_limit
             y = vy / self.controller.pid_sway.output_limit
             r = yaw_rate / self.controller.pid_yaw.output_limit
+            # Report saturation directly -- if r sits at the yaw limit
+            # regardless of the marker's actual orientation, that's the
+            # signature of CAMERA_MOUNT_YAW_DEG being wrong (a bad mount
+            # offset adds a constant error big enough to clip the PID
+            # before the real orientation error is even factored in).
+            if yaw_debug is not None:
+                yaw_debug['yaw_saturated'] = abs(r) >= 0.999
         else:
             x = y = r = 0.0
             self.controller.reset()
@@ -261,6 +298,7 @@ class HardwareManager:
                 'state': state.name,
                 'controlling': self.engine.is_controlling(),
                 'stick': {'x': x, 'y': y, 'r': r},
+                'yaw_debug': yaw_debug,
             }
         return x, y, r
 
@@ -273,6 +311,20 @@ class HardwareManager:
         with self._lock:
             self._control = {'x': _clamp(x), 'y': _clamp(y), 'r': _clamp(r)}
             self._control_updated_at = time.time()
+
+    def set_manual_power(self, power):
+        """Set the manual-mode thruster power scale, 0.0-1.0 (e.g. 0.5 =
+        50%). Applied to x/y/r in _current_manual_control() before
+        anything is sent -- affects manual mode only, not auto (auto's
+        output is already bounded by the PID output_limit values in
+        pose_controller.py, so scaling it again here would just fight
+        the tuned gains)."""
+        with self._lock:
+            self._manual_power = _clamp(power, 0.0, 1.0)
+
+    def get_manual_power(self):
+        with self._lock:
+            return self._manual_power
 
     def arm(self):
         self.veh.arm()
@@ -296,11 +348,13 @@ class HardwareManager:
             control_age = None if never_sent else time.time() - self._control_updated_at
             control_mode = self._mode
             auto_status = dict(self._auto_status)
+            manual_power = self._manual_power
         telem = self.veh.get_telemetry_deg()
         telem['mode'] = self.veh.get_mode_name()
         telem['control_mode'] = control_mode
         telem['control'] = control
         telem['control_age_s'] = control_age
+        telem['manual_power'] = manual_power
         telem['watchdog_tripped'] = (
             control_mode == 'manual' and (never_sent or control_age > CONTROL_TIMEOUT_S)
         )

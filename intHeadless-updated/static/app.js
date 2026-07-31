@@ -93,6 +93,32 @@
     fetch('/api/disarm', { method: 'POST' }).catch(() => {});
   });
 
+  // ---------------- manual power slider ----------------
+  // Scales manual-mode thruster output (e.g. 50 -> half PWM range).
+  // Enforced server-side in hardware.py, this just controls it. While
+  // the user is actively dragging, the periodic state poll won't
+  // overwrite the slider out from under their thumb (userIsAdjustingPower).
+  const powerSlider = document.getElementById('power-slider');
+  const powerValue = document.getElementById('power-value');
+  let userIsAdjustingPower = false;
+
+  function sendPower(pct) {
+    fetch('/api/power', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ power: pct }),
+    }).catch(() => {});
+  }
+
+  powerSlider.addEventListener('input', () => {
+    userIsAdjustingPower = true;
+    powerValue.textContent = powerSlider.value;
+  });
+  powerSlider.addEventListener('change', () => {
+    sendPower(Number(powerSlider.value));
+    userIsAdjustingPower = false;
+  });
+
   // ---------------- manual / auto mode toggle ----------------
   const manualPanel = document.getElementById('manual-panel');
   const autoPanel = document.getElementById('auto-panel');
@@ -155,6 +181,8 @@
   const tiltFill = document.getElementById('tilt-fill');
   const watchdogEl = document.getElementById('watchdog');
   const autoStickReadout = document.getElementById('auto-stick-readout');
+  const yawDebugReadout = document.getElementById('yaw-debug-readout');
+  const yawSaturatedHint = document.getElementById('yaw-saturated-hint');
 
   async function pollState() {
     try {
@@ -187,6 +215,14 @@
 
       if (m.control_mode && m.control_mode !== currentMode) {
         applyModeToUI(m.control_mode);
+      }
+
+      if (!userIsAdjustingPower && m.manual_power != null) {
+        const serverPct = Math.round(m.manual_power * 100);
+        if (Number(powerSlider.value) !== serverPct) {
+          powerSlider.value = serverPct;
+          powerValue.textContent = serverPct;
+        }
       }
 
       setField(telemetryGrid, 'roll_deg', fmt(m.roll_deg, 1, '°'), m.roll_deg == null);
@@ -233,6 +269,15 @@
       if (auto.stick) {
         autoStickReadout.textContent =
           `x=${auto.stick.x.toFixed(2)} y=${auto.stick.y.toFixed(2)} r=${auto.stick.r.toFixed(2)}`;
+      }
+      if (auto.yaw_debug) {
+        yawDebugReadout.textContent =
+          `yaw: cam=${auto.yaw_debug.yaw_cam_deg.toFixed(1)}\u00b0 ` +
+          `body=${auto.yaw_debug.yaw_body_deg.toFixed(1)}\u00b0`;
+        yawSaturatedHint.style.display = auto.yaw_debug.yaw_saturated ? 'block' : 'none';
+      } else {
+        yawDebugReadout.textContent = 'yaw: cam=-- body=--';
+        yawSaturatedHint.style.display = 'none';
       }
 
       if (currentMode === 'manual') {

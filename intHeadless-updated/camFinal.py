@@ -265,7 +265,8 @@ class ArucoDetector:
 
 # ---------------------------------------------------------------------
 def _run_preview(args):
-    """Original standalone behaviour: live window, prints on detection."""
+    """Original standalone behaviour: live window, prints on detection.
+    Pass --no-preview to skip the window and run headless (prints only)."""
     detector = ArucoDetector(
         dict_name=args.dict, width=args.width, height=args.height,
         marker_size=args.marker_size, z_correction=args.z_correction,
@@ -274,16 +275,20 @@ def _run_preview(args):
     )
     detector.start()
     print(f"Camera started ({args.width}x{args.height}), dictionary: {args.dict}")
-    print("Press 'q' in the preview window to quit.")
+    if args.no_preview:
+        print("Running headless (--no-preview) -- Ctrl+C to quit.")
+    else:
+        print("Press 'q' in the preview window to quit.")
 
     window_name = "ArUco Detection - IMX708"
-    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-    screen_res = get_screen_resolution()
-    if screen_res:
-        win_w, win_h = half_area_window_size(*screen_res)
-    else:
-        win_w, win_h = half_area_window_size(args.width, args.height)
-    cv2.resizeWindow(window_name, win_w, win_h)
+    if not args.no_preview:
+        cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+        screen_res = get_screen_resolution()
+        if screen_res:
+            win_w, win_h = half_area_window_size(*screen_res)
+        else:
+            win_w, win_h = half_area_window_size(args.width, args.height)
+        cv2.resizeWindow(window_name, win_w, win_h)
 
     last_print_time = 0.0
     try:
@@ -296,21 +301,25 @@ def _run_preview(args):
                           f"x={pose['x']:.3f}m y={pose['y']:.3f}m "
                           f"z={pose['z']:.3f}m yaw={math.degrees(pose['yaw']):.1f} deg")
                     last_print_time = now
-            cv2.imshow(window_name, frame)
-            if cv2.waitKey(1) & 0xFF == ord("q"):
-                break
+            if not args.no_preview:
+                cv2.imshow(window_name, frame)
+                if cv2.waitKey(1) & 0xFF == ord("q"):
+                    break
     except KeyboardInterrupt:
         pass
     finally:
         detector.stop()
-        cv2.destroyAllWindows()
+        if not args.no_preview:
+            cv2.destroyAllWindows()
 
 
 def _run_calibration_check(args):
     """Live camera-frame -> body-frame comparison, for setting
     CAMERA_MOUNT_*_DEG in pose_controller.py against your real mount.
-    Shows the live video feed with the numbers overlaid, plus prints
-    them to the console. Press 'q' in the video window to quit."""
+    By default shows the live video feed with the numbers overlaid, plus
+    prints them to the console. Pass --no-preview to skip the cv2 window
+    entirely and run over SSH with no monitor attached -- prints only.
+    Press 'q' in the video window (or Ctrl+C in either mode) to quit."""
     from pose_controller import camera_to_body, camera_to_body_yaw
 
     detector = ArucoDetector(
@@ -323,16 +332,20 @@ def _run_calibration_check(args):
     print("Mounting calibration check -- move the marker to a known")
     print("position (e.g. 'to the platform's right') and confirm the")
     print("body-frame values match what you physically expect.")
-    print("Press 'q' in the video window (or Ctrl+C here) to quit.\n")
+    if args.no_preview:
+        print("Running headless (--no-preview) -- Ctrl+C to quit.\n")
+    else:
+        print("Press 'q' in the video window (or Ctrl+C here) to quit.\n")
 
     window_name = "Mounting Calibration Check"
-    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-    screen_res = get_screen_resolution()
-    if screen_res:
-        win_w, win_h = half_area_window_size(*screen_res)
-    else:
-        win_w, win_h = half_area_window_size(args.width, args.height)
-    cv2.resizeWindow(window_name, win_w, win_h)
+    if not args.no_preview:
+        cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+        screen_res = get_screen_resolution()
+        if screen_res:
+            win_w, win_h = half_area_window_size(*screen_res)
+        else:
+            win_w, win_h = half_area_window_size(args.width, args.height)
+        cv2.resizeWindow(window_name, win_w, win_h)
 
     last_print_time = 0.0
     try:
@@ -340,8 +353,9 @@ def _run_calibration_check(args):
             pose, frame = detector.capture_and_detect()
 
             if pose is None:
-                cv2.putText(frame, "no marker detected", (20, 30),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                if not args.no_preview:
+                    cv2.putText(frame, "no marker detected", (20, 30),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
             else:
                 x_body, y_body, z_body = camera_to_body(pose["x"], pose["y"], pose["z"])
                 yaw_body = camera_to_body_yaw(pose["yaw"])
@@ -351,24 +365,27 @@ def _run_calibration_check(args):
                 body_line = (f"body: surge={x_body:+.3f} sway={y_body:+.3f} "
                              f"heave={z_body:+.3f} yaw={math.degrees(yaw_body):+.1f}deg")
 
-                cv2.putText(frame, cam_line, (20, 30),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-                cv2.putText(frame, body_line, (20, 60),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 200, 255), 2)
+                if not args.no_preview:
+                    cv2.putText(frame, cam_line, (20, 30),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                    cv2.putText(frame, body_line, (20, 60),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 200, 255), 2)
 
                 now = time.time()
                 if now - last_print_time >= 0.2:
                     print(f"{cam_line}   |   {body_line}")
                     last_print_time = now
 
-            cv2.imshow(window_name, frame)
-            if cv2.waitKey(1) & 0xFF == ord("q"):
-                break
+            if not args.no_preview:
+                cv2.imshow(window_name, frame)
+                if cv2.waitKey(1) & 0xFF == ord("q"):
+                    break
     except KeyboardInterrupt:
         pass
     finally:
         detector.stop()
-        cv2.destroyAllWindows()
+        if not args.no_preview:
+            cv2.destroyAllWindows()
 
 
 if __name__ == "__main__":
@@ -395,6 +412,10 @@ if __name__ == "__main__":
     parser.add_argument("--calibration-check", action="store_true",
                          help="Run the live camera-to-body mounting check "
                               "instead of the preview window")
+    parser.add_argument("--no-preview", action="store_true",
+                         help="Run headless -- no cv2 window, console output only. "
+                              "Needed on a headless Pi with no monitor attached; works "
+                              "with both the default preview mode and --calibration-check.")
     args = parser.parse_args()
 
     if args.calibration_check:

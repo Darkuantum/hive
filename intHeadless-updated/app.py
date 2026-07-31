@@ -57,6 +57,22 @@ def api_control():
     return jsonify({'ok': True})
 
 
+@app.route('/api/power', methods=['POST'])
+def api_power():
+    """Manual-mode thruster power scale, 0-100 (percent). Applied
+    server-side in hardware.py before anything is sent to the Pixhawk --
+    manual mode only, see HardwareManager.set_manual_power()."""
+    data = request.get_json(silent=True) or {}
+    if 'power' not in data:
+        return jsonify({'ok': False, 'error': 'missing "power"'}), 400
+    try:
+        power_pct = float(data['power'])
+    except (TypeError, ValueError):
+        return jsonify({'ok': False, 'error': '"power" must be a number'}), 400
+    manager.set_manual_power(power_pct / 100.0)
+    return jsonify({'ok': True, 'power': manager.get_manual_power() * 100.0})
+
+
 @app.route('/api/control_mode', methods=['POST'])
 def api_control_mode():
     """Switch between 'manual' (web-page sticks) and 'auto' (camera +
