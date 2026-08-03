@@ -471,6 +471,11 @@ def main():
     session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
     if args.recording_file:
         recording_file = args.recording_file
+        if not recording_file.lower().endswith(".mp4"):
+            # wf-recorder picks its container from this extension -- force
+            # .mp4 so a caller passing e.g. --recording-file out.mkv still
+            # gets an actual MP4 file, not a silently different container.
+            recording_file = os.path.splitext(recording_file)[0] + ".mp4"
     else:
         label_part = args.condition_label.replace(" ", "_") or "session"
         recording_file = os.path.join(args.recording_dir, f"{label_part}_{session_id}.mp4")
