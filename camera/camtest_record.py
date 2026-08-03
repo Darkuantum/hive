@@ -214,7 +214,8 @@ def start_stdin_listener():
 
     def _reader():
         print("(headless mode) Type a command + Enter: space/s = log trial | n = force NOT-detected | "
-              "e+/e- = exposure up/down | g+/g- = gain up/down | a = toggle auto-exposure | q = quit")
+              "e+/e- = exposure up/down | g+/g- = gain up/down | a = toggle auto-exposure | "
+              "u = toggle underwater tuning | q = quit")
         while True:
             try:
                 line = input()
@@ -224,7 +225,7 @@ def start_stdin_listener():
             cmd = line.strip().lower()
             if cmd in ("", "space", "s"):
                 q.put(" ")
-            elif cmd in ("n", "e+", "e-", "g+", "g-", "a", "q"):
+            elif cmd in ("n", "e+", "e-", "g+", "g-", "a", "u", "q"):
                 q.put(cmd)
                 if cmd == "q":
                     break
@@ -342,7 +343,7 @@ def main():
           f"(window={args.latency_window} frames)")
     print("Controls: SPACE = log trial | n = force-log as NOT detected | "
           "e/d = exposure up/down | g/f = gain up/down | a = toggle auto-exposure | "
-          "v = toggle raw/processed view | q = quit")
+          "v = toggle raw/processed view | u = toggle underwater tuning | q = quit")
 
     window_name = "ArUco Test Harness"
     if not args.no_preview:
@@ -380,7 +381,12 @@ def main():
     # --- debug view toggle: watch the raw feed, or what the detector actually sees ---
     view_processed = False  # False = raw camera feed (what your eyes see normally)
                              # True  = the CLAHE/bilateral-processed image handed to detectMarkers
-                             #         (only meaningfully different when --underwater-tuning is on)
+                             #         (only meaningfully different when underwater tuning is on)
+
+    # --- live underwater-tuning toggle (seeded from --underwater-tuning, then
+    # toggleable with 'u' while running -- rebuilds aruco_params each time
+    # since the detector-side widened params are baked in at build_aruco_params()) ---
+    underwater_tuning_enabled = args.underwater_tuning
 
     if not ae_enabled:
         apply_manual_controls()
@@ -392,7 +398,7 @@ def main():
             t_proc_start = time.perf_counter()
             frame = picam2.capture_array()  # RGB888
 
-            if args.underwater_tuning:
+            if underwater_tuning_enabled:
                 detect_input = preprocess_underwater(frame, clip_limit=args.clahe_clip)
             else:
                 detect_input = frame
@@ -402,7 +408,7 @@ def main():
             detected = ids is not None
             marker_id, x, y, z = None, None, None, None
 
-            if view_processed and args.underwater_tuning:
+            if view_processed and underwater_tuning_enabled:
                 # detect_input is grayscale here -- convert back to 3-channel so the
                 # colored marker/axis overlays below still render in color on top of it
                 display = cv2.cvtColor(detect_input, cv2.COLOR_GRAY2RGB)
@@ -455,10 +461,13 @@ def main():
             ae_label = "AUTO-EXPOSURE" if ae_enabled else f"MANUAL exp={current_exposure:.0f}us gain={current_gain:.1f}"
             cv2.putText(display, ae_label, (20, 135),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 200, 255), 2)
-            view_label = "VIEW: PROCESSED (what detector sees)" if (view_processed and args.underwater_tuning) \
+            view_label = "VIEW: PROCESSED (what detector sees)" if (view_processed and underwater_tuning_enabled) \
                 else "VIEW: RAW"
             cv2.putText(display, view_label, (20, 165),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.55, (180, 180, 255), 2)
+            uw_label = f"UNDERWATER TUNING: {'ON' if underwater_tuning_enabled else 'OFF'}"
+            cv2.putText(display, uw_label, (20, 225),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 200, 255), 2)
             latency_color = (0, 0, 255) if latency_over_budget else (100, 255, 100)
             latency_label = (f"LATENCY mean={rolling_mean:.0f} p95={rolling_p95:.0f} "
                               f"max={rolling_max:.0f}ms (warn>{args.latency_warn_ms:.0f}ms)"
@@ -478,7 +487,7 @@ def main():
                     ord(" "): " ", ord("n"): "n", ord("q"): "q",
                     ord("e"): "e+", ord("d"): "e-",
                     ord("g"): "g+", ord("f"): "g-",
-                    ord("a"): "a", ord("v"): "v",
+                    ord("a"): "a", ord("v"): "v", ord("u"): "u",
                 }
                 cmd = key_map.get(raw_key)
             else:
@@ -523,7 +532,7 @@ def main():
                     "lux": meta.get("Lux", ""),
                     "manual_exposure": "" if ae_enabled else current_exposure,
                     "manual_gain": "" if ae_enabled else current_gain,
-                    "underwater_tuning": args.underwater_tuning,
+                    "underwater_tuning": underwater_tuning_enabled,
                     "proc_time_ms": round(proc_time_ms, 1),
                     "rolling_latency_p95_ms": round(rolling_p95, 1),
                     "notes": "forced N (false positive override)" if force_not_detected else "",
@@ -545,12 +554,18 @@ def main():
                     print(f"\nAuto-exposure: OFF -- locked to exp={current_exposure}us gain={current_gain:.1f}")
 
             elif cmd == "v":
-                if not args.underwater_tuning:
-                    print("\n'v' toggle has nothing to show -- --underwater-tuning is off, "
+                if not underwater_tuning_enabled:
+                    print("\n'v' toggle has nothing to show -- underwater tuning is off, "
                           "so there's no separate processed image (raw and processed are identical)")
                 else:
                     view_processed = not view_processed
                     print(f"\nView: {'PROCESSED (what the detector sees)' if view_processed else 'RAW'}")
+
+            elif cmd == "u":
+                underwater_tuning_enabled = not underwater_tuning_enabled
+                aruco_params = build_aruco_params(underwater_tuning_enabled)
+                print(f"\nUnderwater tuning (CLAHE+denoise+detector params): "
+                      f"{'ON' if underwater_tuning_enabled else 'OFF'}")
 
             elif cmd in ("e+", "e-", "g+", "g-"):
                 if ae_enabled:
