@@ -430,13 +430,12 @@ def main():
 
     # --- solo-testing helpers: recording, auto-logging, latency ---
     solo_group = parser.add_argument_group("solo testing")
-    solo_group.add_argument("--record", action=argparse.BooleanOptionalAction, default=False,
+    solo_group.add_argument("--record", action=argparse.BooleanOptionalAction, default=True,
                              help="Auto-start wf-recorder screen recording at launch, stop "
-                                  "cleanly on exit (default OFF -- this is a testing convenience "
-                                  "for reviewing tuning sessions, not part of the deployed "
-                                  "pipeline; pass --record explicitly when you want it). Run "
-                                  "WITHOUT --no-preview for the recording to show the actual "
-                                  "annotated camera feed, not just the terminal.")
+                                  "cleanly on exit (default ON, matching camtest_v2.py -- "
+                                  "--no-record to disable). Run WITHOUT --no-preview for the "
+                                  "recording to show the actual annotated camera feed, not "
+                                  "just the terminal.")
     solo_group.add_argument("--recording-file", default=None,
                              help="Explicit path for the screen recording. Default: auto-named "
                                   "under --recording-dir from the condition label + timestamp.")
