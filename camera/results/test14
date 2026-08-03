@@ -1,0 +1,2 @@
+timestamp,condition_label,distance_cm,angle_deg,lateral_pct,detected,marker_id,x_m,y_m,z_m,exposure_us,analogue_gain,lux,manual_exposure,manual_gain,underwater_tuning,notes
+2026-07-30T14:42:46,,,,,N,,,,,957,1.1228070259094238,16075.7138671875,,,False,
