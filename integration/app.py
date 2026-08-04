@@ -148,13 +148,27 @@ def main():
                          help="Bind address (0.0.0.0 so other devices on the "
                               "LAN can reach a headless Pi)")
     parser.add_argument('--port', type=int, default=8000)
+    # PID tuning (override pose_controller.py defaults at runtime)
+    parser.add_argument('--kp', type=float, default=None, help='Surge/sway proportional gain')
+    parser.add_argument('--ki', type=float, default=None, help='Surge/sway integral gain')
+    parser.add_argument('--kd', type=float, default=None, help='Surge/sway derivative gain')
+    parser.add_argument('--yaw-kp', type=float, default=None, help='Yaw proportional gain')
+    parser.add_argument('--yaw-ki', type=float, default=None, help='Yaw integral gain')
+    parser.add_argument('--yaw-kd', type=float, default=None, help='Yaw derivative gain')
     args = parser.parse_args()
+
+    pose_kw = {}
+    for key in ('kp', 'ki', 'kd', 'yaw_kp', 'yaw_ki', 'yaw_kd'):
+        arg_val = getattr(args, key.replace('-', '_'))
+        if arg_val is not None:
+            pose_kw[key] = arg_val
 
     manager = HardwareManager(
         mavlink_conn=args.mavlink_conn,
         mavlink_baud=args.mavlink_baud,
         enable_camera=not args.no_camera,
         enable_external=not args.no_external,
+        pose_controller_kw=pose_kw or None,
     )
     manager.start()
     try:

@@ -270,6 +270,32 @@
         !accelKnown
       );
 
+      // Battery
+      const bv = m.battery_voltage;
+      const bc = m.battery_current;
+      const br = m.battery_remaining;
+      let batteryText = '--';
+      if (bv != null && bv >= 0) {
+        const parts = [bv.toFixed(1) + 'V'];
+        if (bc != null && bc >= 0) parts.push(bc.toFixed(1) + 'A');
+        if (br != null && br >= 0) parts.push(br + '%');
+        batteryText = parts.join(' / ');
+      }
+      setField(telemetryGrid, 'battery', batteryText, bv == null || bv < 0);
+
+      // STATUSTEXT
+      setField(telemetryGrid, 'statustext', m.statustext || '--', !m.statustext);
+      if (m.statustext && m.statustext_severity != null) {
+        const stEl = telemetryGrid.querySelector('[data-field="statustext"]');
+        if (stEl) {
+          if (m.statustext_severity <= 3) {
+            stEl.style.color = m.statustext_severity <= 2 ? 'var(--color-critical,#d44)' : '#e0a030';
+          } else {
+            stEl.style.color = '';
+          }
+        }
+      }
+
       const tilt = m.tilt_deg;
       if (tilt != null) {
         const pct = Math.min(100, (tilt / 30) * 100); // 30deg == full track, matches stability_tolerance context

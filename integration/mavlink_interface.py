@@ -26,6 +26,7 @@ Usage:
 
 import time
 import math
+import threading
 from pymavlink import mavutil
 
 
@@ -51,7 +52,11 @@ class MavlinkInterface:
             # Raw PWM per MAIN OUT channel (1-4 = your thrusters, 5-6 unused)
             'servo1': None, 'servo2': None, 'servo3': None,
             'servo4': None, 'servo5': None, 'servo6': None,
+            'statustext': None, 'statustext_severity': None,
+            'battery_voltage': None, 'battery_current': None,
+            'battery_remaining': None,
         }
+        self._latest_lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # Connection
@@ -87,6 +92,7 @@ class MavlinkInterface:
             mavutil.mavlink.MAVLINK_MSG_ID_SCALED_PRESSURE2,
             mavutil.mavlink.MAVLINK_MSG_ID_SCALED_PRESSURE,
             mavutil.mavlink.MAVLINK_MSG_ID_SCALED_IMU2,
+            mavutil.mavlink.MAVLINK_MSG_ID_SYS_STATUS,
         ]:
             self.master.mav.command_long_send(
                 self.master.target_system, self.master.target_component,
@@ -152,6 +158,17 @@ class MavlinkInterface:
                 self._latest['accel_y'] = msg.yacc / 1000.0 * 9.80665
                 self._latest['accel_z'] = msg.zacc / 1000.0 * 9.80665
 
+            elif msg_type == 'STATUSTEXT':
+                text = msg.text.rstrip(b'\x00').decode('utf-8', errors='replace')
+                self._latest['statustext'] = text
+                self._latest['statustext_severity'] = msg.severity
+                print(f"[ArduSub:{msg.severity}] {text}")
+
+            elif msg_type == 'SYS_STATUS':
+                self._latest['battery_voltage'] = msg.voltage_battery / 1000.0
+                self._latest['battery_current'] = msg.current_battery / 100.0
+                self._latest['battery_remaining'] = msg.battery_remaining
+
             elif msg_type == 'HEARTBEAT':
                 self._latest['armed'] = bool(
                     msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED
@@ -177,7 +194,16 @@ class MavlinkInterface:
 
     def get_telemetry(self):
         """Return the latest known telemetry snapshot (raw units --
-        radians for angles, as MAVLink and your PID math expect)."""
+        radians for angles, as MAVLink and your PID math expect).
+
+        Thread safety: we rely on CPython's GIL here rather than an
+        explicit lock.  Each ``self._latest[key] = value`` in update()
+        is a single bytecode op (atomic under the GIL), and the key set
+        is fixed at __init__ (never grows/shrinks at runtime), so
+        ``dict(self._latest)`` cannot hit 'dictionary changed size
+        during iteration'.  The worst case is a snapshot that mixes
+        values from two adjacent telemetry messages, which is benign
+        for monotonically-updating sensor data."""
         return dict(self._latest)
 
     def get_telemetry_deg(self):
@@ -351,6 +377,10 @@ class MavlinkInterface:
             mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM,
             0, 1, 0, 0, 0, 0, 0, 0,
         )
+        ack = self.master.recv_match(type='COMMAND_ACK', blocking=True, timeout=2)
+        if ack is None:
+            return None
+        return ack.result  # 0 = MAV_RESULT_ACCEPTED
 
     def disarm(self):
         self.master.mav.command_long_send(
@@ -358,6 +388,10 @@ class MavlinkInterface:
             mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM,
             0, 0, 0, 0, 0, 0, 0, 0,
         )
+        ack = self.master.recv_match(type='COMMAND_ACK', blocking=True, timeout=2)
+        if ack is None:
+            return None
+        return ack.result  # 0 = MAV_RESULT_ACCEPTED
 
     # ------------------------------------------------------------------
     # Commanding motion (the PID output from the decision engine lands here)
@@ -388,20 +422,15 @@ class MavlinkInterface:
             to_1000(r), buttons,
         )
 
-    def send_velocity(self, vx=0.0, vy=0.0, vz=0.0, yaw_rate=0.0):
-        """Send a body-frame velocity setpoint. vx = surge (forward+),
-        vy = sway (right+), vz = heave (down+, leave 0 -- no vertical
-        thrusters), yaw_rate = rotation in rad/s. Requires GUIDED mode."""
-        type_mask = 0b0000011111000111  # ignore position, accel, yaw(abs)
-        self.master.mav.set_position_target_local_ned_send(
-            0,
-            self.master.target_system, self.master.target_component,
-            mavutil.mavlink.MAV_FRAME_BODY_NED,
-            type_mask,
-            0, 0, 0,          # position (ignored)
-            vx, vy, vz,       # velocity
-            0, 0, 0,          # acceleration (ignored)
-            0, yaw_rate,      # yaw, yaw_rate
+
+    def send_statustext(self, text, severity=None):
+        """Send a STATUSTEXT message to the Pixhawk (appears in its log
+        and QGroundControl).  severity is a MAV_SEVERITY constant; defaults
+        to INFO if None."""
+        if severity is None:
+            severity = mavutil.mavlink.MAV_SEVERITY_INFO
+        self.master.mav.statustext_send(
+            severity, text.encode('utf-8')[:50],
         )
 
 

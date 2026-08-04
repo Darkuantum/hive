@@ -40,12 +40,13 @@ import math
 import threading
 import time
 
+from pymavlink import mavutil
 from mavlink_interface import MavlinkInterface
 from pose_controller import PoseController, camera_to_body_yaw
 from decision_engine import DecisionEngine
 
 CONTROL_TIMEOUT_S = 0.5    # manual mode only: zero sticks if nothing posted for this long
-CONTROL_RATE_HZ = 10
+CONTROL_RATE_HZ = 20
 CAMERA_JPEG_QUALITY = 80
 DEFAULT_MANUAL_POWER = 1.0  # 100% -- manual-mode thruster scale, resets here on every connect
 
@@ -58,7 +59,8 @@ def _clamp(v, lo=-1.0, hi=1.0):
 
 class HardwareManager:
     def __init__(self, mavlink_conn='/dev/serial0', mavlink_baud=57600,
-                 enable_camera=True, camera_kwargs=None, enable_external=True):
+                 enable_camera=True, camera_kwargs=None, enable_external=True,
+                 pose_controller_kw=None, engine_kw=None):
         self.enable_camera = enable_camera
         self.enable_external = enable_external
 
@@ -99,8 +101,8 @@ class HardwareManager:
 
         # ---- mode + auto mode state ----
         self._mode = 'manual'
-        self.controller = PoseController()
-        self.engine = DecisionEngine()
+        self.controller = PoseController(**(pose_controller_kw or {}))
+        self.engine = DecisionEngine(**(engine_kw or {}))
         self._auto_status = {
             'state': self.engine.state.name,
             'controlling': False,
@@ -129,6 +131,14 @@ class HardwareManager:
                 target=self._external_thread, name='external', daemon=True))
         for t in self._threads:
             t.start()
+
+        # Handle SIGTERM for clean shutdown (SIGINT is handled by
+        # Flask's KeyboardInterrupt -> finally: manager.stop())
+        import signal
+        def _on_signal(signum, frame):
+            self.stop()
+            raise SystemExit(0)
+        signal.signal(signal.SIGTERM, _on_signal)
 
     def stop(self):
         self._stop.set()
@@ -259,6 +269,28 @@ class HardwareManager:
                 while not self._stop.is_set():
                     loop_start = time.time()
                     self.veh.update(blocking=False)
+
+                    # Leak failsafe: disarm immediately if the hull is wet
+                    if self.enable_external:
+                        ext = self.get_external_telemetry()
+                        if ext and ext.get('leak'):
+                            try:
+                                # Zero sticks FIRST, then disarm — defense in depth.
+                                # If disarm is rejected or its ACK is lost, the motors
+                                # still get a neutral command instead of running on
+                                # the operator's last nonzero stick input.
+                                self.veh.send_manual_control(x=0.0, y=0.0, z=0.5, r=0.0)
+                                self.veh.disarm()
+                                self.veh.send_statustext(
+                                    "LEAK DETECTED - auto-disarmed",
+                                    severity=mavutil.mavlink.MAV_SEVERITY_EMERGENCY,
+                                )
+                            except Exception:
+                                pass
+                            with self._lock:
+                                self._mavlink_status['error'] = 'LEAK DETECTED - disarmed'
+                            time.sleep(1.0)
+                            continue
 
                     mode = self.get_control_mode()
                     if mode == 'auto':
