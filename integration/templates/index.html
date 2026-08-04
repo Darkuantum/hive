@@ -118,6 +118,18 @@
       </div>
 
       <div class="card">
+        <h2>Pixhawk parameters</h2>
+        <div class="param-list" id="param-list">
+          <div class="param-empty">Verifying on next connect...</div>
+        </div>
+        <div class="control-hint">
+          Safety-critical ArduSub parameters verified on connect. Green = matches
+          expected value. Red = misconfigured or unreadable -- fix in QGroundControl
+          before wet testing.
+        </div>
+      </div>
+
+      <div class="card">
         <h2>External Sensors (RPi)</h2>
         <div class="stat-grid" id="external-grid">
           <div class="stat-tile"><div class="label">Roll (accel)</div><div class="value na" data-field="ext-roll">--</div></div>

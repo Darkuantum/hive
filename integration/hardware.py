@@ -84,6 +84,9 @@ class HardwareManager:
         self._external_status = {'connected': False, 'error': None}
         self._latest_external = None
 
+        self._param_status = None
+        self._param_status_lock = threading.Lock()
+
         # ---- manual mode state ----
         self._control = {'x': 0.0, 'y': 0.0, 'r': 0.0}
         self._control_updated_at = 0.0
@@ -175,6 +178,58 @@ class HardwareManager:
             return self._mode
 
     # ------------------------------------------------------------------
+    # parameter verification
+    # ------------------------------------------------------------------
+    def _verify_startup_params(self):
+        """Check safety-critical ArduSub parameters and store results.
+        Called once per successful MAVLink connection (including reconnects)."""
+        CHECKS = [
+            # FRAME_CONFIG intentionally omitted -- the correct value for a
+            # 4-horizontal-thruster rig (no verticals) is not yet confirmed.
+            # ArduSub's FRAME_CONFIG=0 is BlueROV2 Vectored (6 thrusters),
+            # =1 is Vectored6DOF (6 thrusters). Neither matches this rig.
+            # Verify on the bench (P1/P2 in docs/improvements.md), then add
+            # the check back with the confirmed value.
+            {'name': 'FS_GCS_ENABLE', 'expected': 1, 'check': 'gte',
+             'description': 'GCS failsafe enabled (1=warn, 2=ALT_HOLD, 3=disarm)'},
+            {'name': 'ARMING_CHECK', 'expected': 0, 'check': 'neq',
+             'description': 'Pre-arm checks enabled (0=disabled is unsafe)'},
+            {'name': 'FS_BATT_ENABLE', 'expected': 1, 'check': 'gte',
+             'description': 'Battery failsafe enabled'},
+            {'name': 'FENCE_ALT_MAX', 'expected': 0, 'check': 'gt',
+             'description': 'Depth fence configured (max depth limit)'},
+        ]
+        try:
+            results = self.veh.verify_params(CHECKS)
+            with self._param_status_lock:
+                self._param_status = results
+        except Exception as exc:
+            with self._param_status_lock:
+                self._param_status = [
+                    {'name': 'verification', 'expected': None, 'actual': None,
+                     'ok': False, 'description': 'Parameter verification',
+                     'error': f'exception: {exc}'},
+                ]
+        # Print a summary to the console
+        with self._param_status_lock:
+            status = self._param_status
+        if status:
+            print("=== Parameter verification ===")
+            for r in status:
+                tag = "OK" if r['ok'] else "FAIL"
+                print(f"  [{tag}] {r['name']}: "
+                      f"expected={r['expected']}, actual={r['actual']}"
+                      + (f" ({r.get('error', '')})" if r.get('error') else ""))
+            all_ok = all(r['ok'] for r in status)
+            print(f"=== {len(status)} checks, {'ALL PASS' if all_ok else 'SOME FAILED'} ===")
+
+    def get_param_status(self):
+        """Return the latest parameter verification results (list of dicts),
+        or None if verification hasn't run yet."""
+        with self._param_status_lock:
+            return self._param_status
+
+    # ------------------------------------------------------------------
     # mavlink: telemetry in, sticks out (manual or auto), watchdog inline
     # ------------------------------------------------------------------
     def _mavlink_thread(self):
@@ -185,6 +240,9 @@ class HardwareManager:
                 self.veh.connect()
                 with self._lock:
                     self._mavlink_status = {'connected': True, 'error': None}
+
+                # Verify safety-critical parameters once per successful connect
+                self._verify_startup_params()
             except Exception as exc:
                 with self._lock:
                     self._mavlink_status = {'connected': False, 'error': str(exc)}

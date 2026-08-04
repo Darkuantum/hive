@@ -206,6 +206,108 @@ class MavlinkInterface:
         return t
 
     # ------------------------------------------------------------------
+    # Parameter management
+    # ------------------------------------------------------------------
+    def read_param(self, param_name, timeout=2.0):
+        """Request a single parameter value from ArduSub and return it.
+
+        Sends PARAM_REQUEST_READ, waits for the matching PARAM_VALUE
+        response, and returns the float value.  Returns None if the
+        response doesn't arrive within *timeout* seconds or the
+        returned param_id doesn't match.
+        """
+        self.master.mav.param_request_read_send(
+            self.master.target_system,
+            self.master.target_component,
+            param_name.encode('utf-8'),
+            -1,
+        )
+        msg = self.master.recv_match(
+            type='PARAM_VALUE', blocking=True, timeout=timeout,
+        )
+        if msg is None:
+            return None
+        # param_id is a 16-byte fixed-length field padded with nulls
+        if msg.param_id.rstrip(b'\x00').decode('utf-8', errors='replace') != param_name:
+            return None
+        return msg.param_value
+
+    def set_param(self, param_name, value, param_type=None):
+        """Set a parameter on the vehicle and wait for confirmation.
+
+        Sends PARAM_SET and waits for the PARAM_VALUE echo that
+        ArduSub sends back to confirm the write.
+
+        The vehicle should be disarmed when changing most parameters;
+        some params also require a reboot before they take effect.
+        Returns the confirmed value (float) on success, or None on
+        timeout.
+        """
+        if param_type is None:
+            param_type = mavutil.mavlink.MAV_PARAM_TYPE_REAL32
+        self.master.mav.param_set_send(
+            self.master.target_system,
+            self.master.target_component,
+            param_name.encode('utf-8'),
+            float(value),
+            param_type,
+        )
+        msg = self.master.recv_match(
+            type='PARAM_VALUE', blocking=True, timeout=2.0,
+        )
+        if msg is None:
+            return None
+        if msg.param_id.rstrip(b'\x00').decode('utf-8', errors='replace') != param_name:
+            return None
+        return msg.param_value
+
+    def verify_params(self, checks):
+        """Verify a list of ArduSub parameters against expected values.
+
+        *checks* is a list of dicts, each with keys:
+            name        – parameter name (str)
+            expected    – expected value (numeric)
+            check       – comparison operator: 'eq', 'gte', 'gt', 'neq'
+            description – human-readable label
+
+        Returns a list of result dicts with keys:
+            name, expected, actual (float or None), ok (bool),
+            description, error (str, present only on failure).
+        """
+        results = []
+        for chk in checks:
+            name = chk['name']
+            expected = chk['expected']
+            op = chk.get('check', 'eq')
+            actual = self.read_param(name)
+            entry = {
+                'name': name,
+                'expected': expected,
+                'actual': actual,
+                'ok': False,
+                'description': chk.get('description', ''),
+            }
+            if actual is None:
+                entry['error'] = 'read failed'
+            else:
+                if op == 'eq':
+                    entry['ok'] = (actual == expected)
+                elif op == 'gte':
+                    entry['ok'] = (actual >= expected)
+                elif op == 'gt':
+                    entry['ok'] = (actual > expected)
+                elif op == 'neq':
+                    entry['ok'] = (actual != expected)
+                else:
+                    entry['error'] = f"unknown check operator: {op!r}"
+                if not entry['ok'] and 'error' not in entry:
+                    entry['error'] = (
+                        f"expected {op} {expected}, got {actual}"
+                    )
+            results.append(entry)
+        return results
+
+    # ------------------------------------------------------------------
     # Mode / arming
     # ------------------------------------------------------------------
     def set_fake_ekf_origin(self, lat=0.0, lon=0.0, alt=0.0):

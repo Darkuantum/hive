@@ -47,6 +47,11 @@ def api_state():
     })
 
 
+@app.route('/api/params')
+def api_params():
+    return jsonify(manager.get_param_status() or [])
+
+
 @app.route('/api/control', methods=['POST'])
 def api_control():
     """Manual-mode stick input. Accepted (and stored) regardless of

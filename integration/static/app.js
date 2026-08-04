@@ -184,10 +184,37 @@
   const yawDebugReadout = document.getElementById('yaw-debug-readout');
   const yawSaturatedHint = document.getElementById('yaw-saturated-hint');
 
+  function renderParams(params) {
+    const container = document.getElementById('param-list');
+    if (!params || params.length === 0) {
+      container.innerHTML = '<div class="param-empty">Verifying on next connect...</div>';
+      return;
+    }
+    let html = '';
+    for (const p of params) {
+      const dotClass = p.ok ? 'good' : 'critical';
+      const actualStr = p.actual != null ? p.actual : '--';
+      const expectedStr = p.expected != null ? p.expected : '--';
+      const errorStr = p.error ? ` <span style="color:var(--color-critical,#d44);font-size:11px;">(${p.error})</span>` : '';
+      html += `<div class="param-row">` +
+        `<span class="dot ${dotClass}" style="display:inline-block;width:8px;height:8px;border-radius:50;margin-right:6px;flex-shrink:0;"></span>` +
+        `<span style="font-weight:600;">${p.name}</span>` +
+        `<span style="color:var(--text-muted,#999);margin-left:6px;font-size:12px;">${p.description}</span>` +
+        `<div style="font-size:12px;margin-top:2px;color:var(--text-muted,#999);padding-left:14px;">expected ${expectedStr}, got ${actualStr}${errorStr}</div>` +
+        `</div>`;
+    }
+    container.innerHTML = html;
+  }
+
   async function pollState() {
     try {
       const res = await fetch('/api/state');
       const data = await res.json();
+
+      // Fetch parameter verification status in parallel
+      fetch('/api/params').then(r => r.json()).then(params => {
+        renderParams(params);
+      }).catch(() => {});
       const m = data.mavlink || {};
       const cam = data.camera || {};
       const pose = data.pose;
