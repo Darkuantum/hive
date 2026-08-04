@@ -37,7 +37,10 @@ LED_STATES = {
     'disconnected':  ((255, 0, 0),    SLOW_PULSE, 0.5),
     'manual':        ((255, 255, 255), SOLID,      None),   # brightness from slider
     'SEARCHING':     ((255, 255, 255), SOLID,      1.0),
-    'DETECTED':      ((255, 255, 255), SLOW_PULSE, 0.7),
+    # DETECTED and ALIGNING share the same LED stage: the moment the marker
+    # is detected, the PID starts correcting. No operationally meaningful
+    # difference for the operator.
+    'DETECTED':      ((255, 255, 255), BLINK,      0.5),
     'ALIGNING':      ((255, 255, 255), BLINK,      0.5),
     'READY':         ((0, 255, 0),    SOLID,      0.5),
     'RECOVERING':    ((0, 255, 0),    FAST_BLINK, 1.0),
