@@ -194,12 +194,8 @@ class HardwareManager:
         """Check safety-critical ArduSub parameters and store results.
         Called once per successful MAVLink connection (including reconnects)."""
         CHECKS = [
-            # FRAME_CONFIG intentionally omitted -- the correct value for a
-            # 4-horizontal-thruster rig (no verticals) is not yet confirmed.
-            # ArduSub's FRAME_CONFIG=0 is BlueROV2 Vectored (6 thrusters),
-            # =1 is Vectored6DOF (6 thrusters). Neither matches this rig.
-            # Verify on the bench (P1/P2 in docs/improvements.md), then add
-            # the check back with the confirmed value.
+            {'name': 'FRAME_TYPE', 'expected': 1, 'check': 'eq',
+             'description': 'BlueROV2 Vectored (4 horizontal thrusters; motors 5-6 vertical unconnected)'},
             {'name': 'FS_GCS_ENABLE', 'expected': 1, 'check': 'gte',
              'description': 'GCS failsafe enabled (1=warn, 2=ALT_HOLD, 3=disarm)'},
             {'name': 'ARMING_CHECK', 'expected': 0, 'check': 'neq',
