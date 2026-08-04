@@ -199,8 +199,10 @@ class ArucoDetector:
         self.picam2.set_controls({
             "ExposureTime": self.exposure_us,
             "AnalogueGain": self.gain,
-            # Disable Pi 4 software denoise -- runs on CPU, adds per-frame
-            # latency. The Pi 5 has hardware denoise; the Pi 4 does not.
+            # Disable the IPA software denoise stage (SDN) that runs on
+            # the CPU on Pi 4 -- it adds per-frame latency. Both Pi 4 and
+            # Pi 5 have hardware ISP denoise; this only disables the extra
+            # software post-processing stage.
             "NoiseReductionMode": 0,
         })
 
@@ -400,6 +402,9 @@ def _run_calibration_check(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="ArUco detection + pose on IMX708 CSI camera")
     parser.add_argument("--dict", default="DICT_4X4_50", choices=ARUCO_DICTS.keys())
+    # Standalone preview keeps 1280x720 for display quality on a monitor.
+    # The class default (640x480) is optimized for the headless integration
+    # path where detection speed matters more than preview resolution.
     parser.add_argument("--width", type=int, default=1280)
     parser.add_argument("--height", type=int, default=720)
     parser.add_argument("--calib", default=None,

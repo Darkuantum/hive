@@ -5,6 +5,14 @@ configuration as separate domains. No merging of camera and integration code.
 Generated from a deepwork research session (Pixhawk/ArduSub deep dive + integration
 code audit + Oracle architectural review).*
 
+> **Implementation status (branch `improvements`):** All code-implementable items
+> are done. Phase 1 (MAVLink param management + startup verification + web UI),
+> Phase 2 (10 integration safety/robustness items), Phase 3 (camera perf +
+> consolidation). Each phase passed an Oracle architectural gate review. Items
+> requiring physical testing (I4 camera-to-body transform, I5 MANUAL stick-freeze,
+> P1/P2 frame config bench verification) are documented but cannot be code-tested
+> without the rig. See `.slim/deepwork/implementation.md` for the full log.
+
 ---
 
 ## Confirmed architecture context
