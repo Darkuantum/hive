@@ -4,3 +4,4 @@ __pycache__/
 .slim/deepwork/
 
 camera/recordings/
+camera/results/
