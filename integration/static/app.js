@@ -119,6 +119,20 @@
     userIsAdjustingPower = false;
   });
 
+  // ---------------- LED brightness slider ----------------
+  const ledSlider = document.getElementById('led-slider');
+  const ledValue = document.getElementById('led-value');
+  ledSlider.addEventListener('input', () => {
+    ledValue.textContent = ledSlider.value;
+  });
+  ledSlider.addEventListener('change', () => {
+    fetch('/api/led', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ brightness: parseFloat(ledSlider.value) }),
+    });
+  });
+
   // ---------------- manual / auto mode toggle ----------------
   const manualPanel = document.getElementById('manual-panel');
   const autoPanel = document.getElementById('auto-panel');

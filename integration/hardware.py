@@ -60,6 +60,7 @@ def _clamp(v, lo=-1.0, hi=1.0):
 class HardwareManager:
     def __init__(self, mavlink_conn='/dev/serial0', mavlink_baud=57600,
                  enable_camera=True, camera_kwargs=None, enable_external=True,
+                 enable_led=True, num_leds=8,
                  pose_controller_kw=None, engine_kw=None):
         self.enable_camera = enable_camera
         self.enable_external = enable_external
@@ -80,6 +81,14 @@ class HardwareManager:
             from external_sensors import ExternalSensors
             self.external = ExternalSensors()
 
+        self.led = None
+        if enable_led:
+            try:
+                from led_controller import LEDController
+                self.led = LEDController(num_pixels=num_leds)
+            except Exception as exc:
+                print(f"LED controller unavailable: {exc}")
+
         self._lock = threading.Lock()
         self._mavlink_status = {'connected': False, 'error': None}
         self._camera_status = {'connected': False, 'error': None}
@@ -98,6 +107,7 @@ class HardwareManager:
         # Enforced here server-side, not just in the UI, so a stale page
         # or a bypassed slider can't push more power than intended.
         self._manual_power = DEFAULT_MANUAL_POWER
+        self._led_manual_brightness = 0.5
 
         # ---- mode + auto mode state ----
         self._mode = 'manual'
@@ -148,6 +158,8 @@ class HardwareManager:
             self.detector.stop()
         if self.external is not None:
             self.external.stop()
+        if self.led is not None:
+            self.led.off()
 
     # ------------------------------------------------------------------
     # mode switching
@@ -283,6 +295,9 @@ class HardwareManager:
                                 )
                             except Exception:
                                 pass
+                            if self.led is not None:
+                                self.led.set_state('leak')
+                                self.led.update()
                             with self._lock:
                                 self._mavlink_status['error'] = 'LEAK DETECTED - disarmed'
                             time.sleep(1.0)
@@ -293,6 +308,24 @@ class HardwareManager:
                         x, y, r = self._compute_auto_control()
                     else:
                         x, y, r = self._current_manual_control()
+
+                    # Update LED status indicator
+                    if self.led is not None:
+                        error_state = None
+                        if self._latest_external and self._latest_external.get('leak'):
+                            error_state = 'leak'
+                        elif not self._mavlink_status.get('connected'):
+                            error_state = 'disconnected'
+
+                        if error_state:
+                            self.led.set_state(error_state)
+                        elif mode == 'auto':
+                            # Use the DecisionEngine's current state name
+                            self.led.set_state(self.engine.state.name)
+                        else:
+                            self.led.set_state('manual')
+
+                        self.led.update()
 
                     self.veh.send_manual_control(x=x, y=y, z=0.5, r=r)
                     with self._lock:
@@ -403,6 +436,16 @@ class HardwareManager:
     def get_manual_power(self):
         with self._lock:
             return self._manual_power
+
+    def set_led_brightness(self, brightness):
+        """Manual-mode LED brightness (0.0-1.0). Called from web UI."""
+        if self.led is not None:
+            self.led.set_manual_brightness(brightness)
+
+    def get_led_brightness(self):
+        if self.led is not None:
+            return self.led._manual_brightness
+        return 0.5
 
     def arm(self):
         self.veh.arm()

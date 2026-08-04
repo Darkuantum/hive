@@ -78,6 +78,19 @@ def api_power():
     return jsonify({'ok': True, 'power': manager.get_manual_power() * 100.0})
 
 
+@app.route('/api/led', methods=['POST'])
+def api_led():
+    data = request.get_json(silent=True) or {}
+    if 'brightness' not in data:
+        return jsonify({'ok': False, 'error': 'missing "brightness"'}), 400
+    try:
+        brightness = float(data['brightness'])
+    except (TypeError, ValueError):
+        return jsonify({'ok': False, 'error': '"brightness" must be a number'}), 400
+    manager.set_led_brightness(brightness / 100.0)
+    return jsonify({'ok': True, 'brightness': manager.get_led_brightness() * 100.0})
+
+
 @app.route('/api/control_mode', methods=['POST'])
 def api_control_mode():
     """Switch between 'manual' (web-page sticks) and 'auto' (camera +
@@ -144,6 +157,10 @@ def main():
                          help="Skip the external ICM20948/leak sensor thread "
                               "(e.g. testing off-Pi, or before that hardware "
                               "is wired up)")
+    parser.add_argument('--num-leds', type=int, default=8,
+                         help="Number of LEDs on the DotStar strip (default: 8)")
+    parser.add_argument('--no-led', action='store_true',
+                         help="Skip LED strip startup (e.g. bench-testing off-Pi)")
     parser.add_argument('--host', default='0.0.0.0',
                          help="Bind address (0.0.0.0 so other devices on the "
                               "LAN can reach a headless Pi)")
@@ -168,6 +185,8 @@ def main():
         mavlink_baud=args.mavlink_baud,
         enable_camera=not args.no_camera,
         enable_external=not args.no_external,
+        enable_led=not args.no_led,
+        num_leds=args.num_leds,
         pose_controller_kw=pose_kw or None,
     )
     manager.start()
