@@ -8,10 +8,13 @@ software half of a hardware capstone built with [BeeX](https://www.beex.sg/)
 (Singapore AUV manufacturer) for SUTD's *30.007 Engineering Design Innovation*,
 Term 5 2026.
 
-> Repository status: **pre-alpha.** Only the vision node (`aruco_detect.py`) is
-> committed. The rest of this README describes the target architecture the team
-> is building toward on the Gate 0-5 ladder in [Roadmap](#roadmap--gates).
-> Sections marked *planned* are design intent, not shipped code.
+> Repository status: **alpha.** Vision (ArUco on the CSI camera), depth, IMU,
+> leak sensing, and a MAVLink-driven control loop are committed and
+> bench-tested. The full vision-to-thruster pipeline (camera, frame transform,
+> per-axis PID, recovery state machine) is coded in `integration/` and has run
+> against a Pixhawk on the bench. Wet closed-loop testing toward Gate 4 is the
+> current frontier. Active camera tuning for dark/underwater conditions lives
+> on the `tuningv2` branch.
 
 ---
 
@@ -95,12 +98,12 @@ Bring-up check: `i2cdetect -y 1` must show `0x40`, `0x68`/`0x69`, and `0x76`.
 
 | Path | Status | Description |
 |---|---|---|
-| `aruco_detect.py` | **shipped** | ArUco marker detection on the Raspberry Pi CSI camera (IMX708). The first vision node; see [Running](#running). |
-| `vision/` | planned | Pose estimation from the marker, pixel-to-body error, target handoff to control. |
-| `control/` | planned | State estimator, PID loops, thrust-allocation matrix, failsafe watchdog. |
-| `drivers/` | planned | PCA9685 PWM, ICM-20948, MS5837, UVC camera wrappers. |
-| `mission/` | planned | Capture state machine: home, gate, settle, capture-confirm, retry. |
-| `homing/` | planned *(stretch)* | Bearing-only acoustic homing for the self-navigating catcher (Phase 2). |
+| `camera/` | active | ArUco detection and pose estimation on the CSI camera (IMX708). Multiple script variants for different marker sizes and lighting; `camtest.py` is the current tuning harness for dark/underwater work. `results/` holds trial data. |
+| `integration/` | active | Canonical integrated stack: MAVLink interface, ArUco vision node, per-axis PID (`pose_controller.py`), recovery state machine (`decision_engine.py`), external sensors, and a Flask web UI with manual and auto (camera-following) modes. Runs headless on the Pi. |
+| `webui/` | active | Lightweight LAN web UI for headless monitoring during runs. Manual control only; imports modules from `integration/`. |
+| `positioning/` | bench | Sensor bring-up: ICM20948 IMU + Blue Robotics SOS leak detector test harness. |
+| `led/` | driver | APA102/DotStar status indicator strip over SPI. |
+| `archive/` | reference | Superseded code kept for reference: the standalone frame station-keep MAVLink test, the prior `integration-old/` stack. |
 
 ---
 
@@ -136,33 +139,57 @@ the expensive USBL from the critical path.
 
 ## Running
 
-`aruco_detect.py` runs on a Raspberry Pi with a CSI camera (IMX708). It uses
-the legacy OpenCV ArUco API (`cv2.aruco.Dictionary_get`,
-`cv2.aruco.detectMarkers`), which is provided by **opencv-contrib-python <
-4.7**.
+All Python runs on a Raspberry Pi 4 under `uv run`. Install per-directory
+dependencies as needed.
+
+### Camera scripts (`camera/`)
+
+`aruco_detect.py` is the minimal detector. It uses the legacy OpenCV ArUco API
+(`cv2.aruco.Dictionary_get`, `cv2.aruco.detectMarkers`), which requires
+**opencv-contrib-python < 4.7**:
 
 ```bash
-# install deps (prefer uv)
 uv pip install opencv-contrib-python numpy picamera2
 
-# live preview with detection overlay
-uv run python aruco_detect.py
-
-# headless (e.g. over SSH), default 1280x720
-uv run python aruco_detect.py --no-preview
-
-# pick a different ArUco dictionary and resolution
-uv run python aruco_detect.py --dict DICT_5X5_50 --width 1920 --height 1080
-
-# throttle repeated "detected" prints
-uv run python aruco_detect.py --notify-cooldown 2.0
+uv run python camera/aruco_detect.py               # live preview
+uv run python camera/aruco_detect.py --no-preview   # headless over SSH
+uv run python camera/aruco_detect.py --dict DICT_5X5_50 --width 1920 --height 1080
 ```
 
-Flags:
-- `--dict` ArUco dictionary (default `DICT_4X4_50`).
-- `--width` / `--height` capture resolution (default 1280x720).
-- `--no-preview` run headless, print detections only.
-- `--notify-cooldown` seconds between repeated detection prints (default 1.0).
+`camFinal.py` adds 6-DOF pose estimation. `camtest.py` is the trial-logging
+harness with live exposure/gain tuning and underwater preprocessing; run with
+`--help` for the experiment workflow.
+
+### Integrated stack (`integration/`)
+
+The full autonomy stack with a Flask web UI for headless Pi operation:
+
+```bash
+cd integration
+uv pip install -r requirements.txt     # flask
+uv pip install pymavlink picamera2 opencv-contrib-python numpy
+
+# on the Pi, against a Pixhawk on /dev/serial0:
+uv run python app.py --mavlink-conn /dev/serial0
+
+# off-Pi bench test (no camera, no external sensors, SITL):
+uv run python app.py --no-camera --no-external --mavlink-conn udp:127.0.0.1:14550
+```
+
+Open `http://<pi-ip>:8000` from a browser on the same LAN. Manual D-pad
+control and auto (camera-following) mode are both available. The simpler
+`webui/app.py` serves a monitoring-only variant with the same pattern.
+
+### Sensor tests (`positioning/`, `led/`)
+
+```bash
+uv pip install adafruit-circuitpython-icm20x adafruit-blinka RPi.GPIO
+uv run python positioning/leak_imu_test.py    # ICM20948 + leak sensor
+
+uv pip install adafruit-circuitpython-dotstar
+uv run python led/led_test.py --num-pixels 8   # DotStar chase test
+uv run python led/led_test.py --mode on        # solid white
+```
 
 Known TODO: the legacy ArUco API is removed in modern OpenCV. Migrate to
 `cv2.aruco.ArucoDetector` (OpenCV >= 4.7) before depending on this in the full

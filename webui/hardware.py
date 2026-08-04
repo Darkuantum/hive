@@ -1,8 +1,8 @@
 """
 hardware.py
 
-Thin, thread-safe wrapper around the existing integration/ modules
-(MavlinkInterface, ArucoDetector) for the web UI. This module does not
+Thin, thread-safe wrapper around the integration/ modules
+(MavlinkInterface) for the web UI. This module does not
 modify those files -- it only imports and drives them from background
 threads, and exposes plain get/set methods that app.py's Flask routes
 call. Safe to import and exercise without Flask at all.

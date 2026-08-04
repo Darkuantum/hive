@@ -1,7 +1,7 @@
 """
 hardware.py
 
-Thin, thread-safe wrapper around the existing integration/ modules
+Thin, thread-safe wrapper around the local integration modules
 (MavlinkInterface, ArucoDetector, DecisionEngine, PoseController) for
 the web UI. This module does not modify those files -- it only imports
 and drives them from background threads, and exposes plain get/set
@@ -36,21 +36,13 @@ Three background threads:
     feed and telemetry API are never blocked on a slow capture, and so
     auto mode always has a fresh pose to react to.
 """
-import os
-import sys
+import math
 import threading
 import time
 
-_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-_INTEGRATION_DIR = os.path.abspath(os.path.join(_THIS_DIR, '..', 'integration'))
-if _INTEGRATION_DIR not in sys.path:
-    sys.path.insert(0, _INTEGRATION_DIR)
-
-import math
-
-from mavlink_interface import MavlinkInterface  # noqa: E402
-from pose_controller import PoseController, camera_to_body_yaw  # noqa: E402
-from decision_engine import DecisionEngine       # noqa: E402
+from mavlink_interface import MavlinkInterface
+from pose_controller import PoseController, camera_to_body_yaw
+from decision_engine import DecisionEngine
 
 CONTROL_TIMEOUT_S = 0.5    # manual mode only: zero sticks if nothing posted for this long
 CONTROL_RATE_HZ = 10
