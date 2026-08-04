@@ -42,8 +42,8 @@ LED_STATES = {
     # difference for the operator.
     'DETECTED':      ((255, 255, 255), BLINK,      0.5),
     'ALIGNING':      ((255, 255, 255), BLINK,      0.5),
-    'READY':         ((0, 255, 0),    SOLID,      0.5),
-    'RECOVERING':    ((0, 255, 0),    FAST_BLINK, 1.0),
+    'READY':         ((0, 255, 0),    FAST_BLINK, 1.0),
+    'RECOVERING':    ((0, 255, 0),    SOLID,      0.5),
 }
 
 ERROR_STATES = {'leak', 'disconnected'}  # these override recovery states
@@ -55,6 +55,7 @@ class LEDController:
         self.default_brightness = default_brightness
         self._state = 'disconnected'
         self._manual_brightness = default_brightness
+        self._failure_until = 0.0  # timestamp; failure flash active until this
         self._lock = threading.Lock()
 
         if _HAS_HARDWARE:
@@ -88,11 +89,28 @@ class LEDController:
         with self._lock:
             return self._state
 
+    def flash_failure(self, duration_s=1.5):
+        """Brief red solid flash to indicate a backward state transition
+        (e.g. marker lost during alignment). Distinct from persistent
+        error patterns (leak = fast blink, disconnected = slow pulse)."""
+        with self._lock:
+            self._failure_until = time.time() + duration_s
+
     def update(self):
         """Called from the mavlink thread at 20 Hz. Computes the current
         color and brightness based on state, pattern, and elapsed time,
         then writes to the LED strip."""
         if self.pixels is None:
+            return
+
+        t = time.time()
+
+        # Failure flash: brief red solid, overrides normal state.
+        with self._lock:
+            failure_active = t < self._failure_until
+        if failure_active:
+            self.pixels.fill((255, 0, 0))
+            self.pixels.show()
             return
 
         with self._lock:
@@ -105,7 +123,6 @@ class LEDController:
         color, pattern, max_brightness = LED_STATES[state]
 
         # Compute effective brightness based on pattern and time
-        t = time.time()
         if pattern == SOLID:
             brightness = max_brightness if max_brightness is not None else manual_b
         elif pattern == SLOW_PULSE:

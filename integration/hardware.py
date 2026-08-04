@@ -108,6 +108,7 @@ class HardwareManager:
         # or a bypassed slider can't push more power than intended.
         self._manual_power = DEFAULT_MANUAL_POWER
         self._led_manual_brightness = 0.5
+        self._last_led_engine_state = None  # for backward-transition detection
 
         # ---- mode + auto mode state ----
         self._mode = 'manual'
@@ -319,11 +320,20 @@ class HardwareManager:
 
                         if error_state:
                             self.led.set_state(error_state)
+                            self._last_led_engine_state = None
                         elif mode == 'auto':
-                            # Use the DecisionEngine's current state name
-                            self.led.set_state(self.engine.state.name)
+                            engine_state = self.engine.state.name
+                            # Detect backward transition (marker lost, etc.)
+                            _ORDER = ['SEARCHING', 'DETECTED', 'ALIGNING', 'READY', 'RECOVERING']
+                            if (self._last_led_engine_state in _ORDER
+                                    and engine_state in _ORDER
+                                    and _ORDER.index(engine_state) < _ORDER.index(self._last_led_engine_state)):
+                                self.led.flash_failure(1.5)
+                            self._last_led_engine_state = engine_state
+                            self.led.set_state(engine_state)
                         else:
                             self.led.set_state('manual')
+                            self._last_led_engine_state = None
 
                         self.led.update()
 
