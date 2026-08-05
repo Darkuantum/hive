@@ -49,7 +49,11 @@ class MavlinkInterface:
             'armed': False,
             'custom_mode': None,
             'accel_x': None, 'accel_y': None, 'accel_z': None,  # m/s^2, from SCALED_IMU2
-            # Raw PWM per MAIN OUT channel (1-4 = your thrusters, 5-6 unused)
+            # Raw PWM/DShot-equivalent value per thruster (servo1-4) and
+            # per unused vertical output (servo5-6, always literal MAIN5-6).
+            # servo1-4 are NOT literal MAIN1-4 -- they track wherever
+            # Motor1-4 actually live, MAIN or AUX, via _motor_channels
+            # (see _detect_motor_channels()).
             'servo1': None, 'servo2': None, 'servo3': None,
             'servo4': None, 'servo5': None, 'servo6': None,
             'statustext': None, 'statustext_severity': None,
@@ -57,6 +61,9 @@ class MavlinkInterface:
             'battery_remaining': None,
         }
         self._latest_lock = threading.Lock()
+        # {motor_num (1-4): physical output channel}, populated by
+        # _detect_motor_channels() on connect. Empty until then.
+        self._motor_channels = {}
 
     # ------------------------------------------------------------------
     # Connection
@@ -65,7 +72,7 @@ class MavlinkInterface:
         """Open the connection and block until the first heartbeat arrives."""
         print(f"Connecting to {self.connection_string} ...")
         self.master = mavutil.mavlink_connection(
-            self.connection_string, baud=self.baud
+            self.connection_string, baud=self.baud, robust_parsing=True
         )
 
         print("Waiting for heartbeat...")
@@ -80,6 +87,45 @@ class MavlinkInterface:
             f"component {self.master.target_component})"
         )
         self._request_streams()
+        self._detect_motor_channels()
+
+    # SERVOx_FUNCTION values ArduPilot uses for Motor1-4
+    _MOTOR_FUNCTION_IDS = {33: 1, 34: 2, 35: 3, 36: 4}
+
+    def _detect_motor_channels(self, max_channel=16):
+        """Find which physical output channel currently drives each of
+        Motor1-4, by reading SERVOx_FUNCTION for channels 1..max_channel.
+        SERVO_OUTPUT_RAW (and DShot itself) is indexed by raw channel
+        number, not motor number, so this is what lets telemetry stay
+        correct whether the thrusters are wired to MAIN (1-8) or AUX
+        (9-14) -- see get_output_bank()."""
+        found = {}
+        for chan in range(1, max_channel + 1):
+            val = self.read_param(f'SERVO{chan}_FUNCTION', timeout=1.5)
+            if val is not None and int(val) in self._MOTOR_FUNCTION_IDS:
+                found[self._MOTOR_FUNCTION_IDS[int(val)]] = chan
+            if len(found) == 4:
+                break
+        with self._latest_lock:
+            self._motor_channels = found
+
+    def get_motor_channels(self):
+        """{motor_num: physical output channel}, e.g. {1: 1, 2: 2, 3: 3,
+        4: 4} on MAIN or {1: 11, 2: 12, 3: 13, 4: 14} on AUX. May have
+        fewer than 4 entries if a motor's output couldn't be found."""
+        with self._latest_lock:
+            return dict(self._motor_channels)
+
+    def get_output_bank(self):
+        """Best-effort label for where Motor1-4 currently live: 'MAIN'
+        if every detected channel is 1-8, 'AUX' if every one is 9+,
+        'MIXED' if split across both (unusual), 'UNKNOWN' if detection
+        hasn't run yet or didn't find all 4."""
+        chans = list(self.get_motor_channels().values())
+        if len(chans) < 4:
+            return 'UNKNOWN'
+        banks = {'MAIN' if c <= 8 else 'AUX' for c in chans}
+        return banks.pop() if len(banks) == 1 else 'MIXED'
 
     def _request_streams(self, rate_hz=10):
         """Ask ArduSub to stream ATTITUDE and VFR_HUD at a known rate.
@@ -126,15 +172,16 @@ class MavlinkInterface:
                 self._latest['depth'] = msg.alt
 
             elif msg_type == 'SERVO_OUTPUT_RAW':
-                # Raw PWM (microseconds) currently being sent to each
-                # MAIN OUT channel. 1500 = neutral/no thrust, values above
-                # or below that indicate thrust direction and magnitude.
-                self._latest['servo1'] = msg.servo1_raw
-                self._latest['servo2'] = msg.servo2_raw
-                self._latest['servo3'] = msg.servo3_raw
-                self._latest['servo4'] = msg.servo4_raw
+                # Raw PWM/DShot-equivalent value (microseconds). 1500 =
+                # neutral/no thrust, values above or below indicate
+                # thrust direction and magnitude. servo1-4 are read from
+                # whichever channel _detect_motor_channels() found for
+                # each motor (MAIN or AUX); servo5-6 are always the
+                # literal, unused vertical MAIN outputs.
                 self._latest['servo5'] = msg.servo5_raw
                 self._latest['servo6'] = msg.servo6_raw
+                for motor_num, chan in self._motor_channels.items():
+                    self._latest[f'servo{motor_num}'] = getattr(msg, f'servo{chan}_raw', None)
 
             elif msg_type == 'SCALED_PRESSURE2':
                 # press_abs is in hPa (equivalent to mbar). temperature is
@@ -159,7 +206,8 @@ class MavlinkInterface:
                 self._latest['accel_z'] = msg.zacc / 1000.0 * 9.80665
 
             elif msg_type == 'STATUSTEXT':
-                text = msg.text.rstrip(b'\x00').decode('utf-8', errors='replace')
+                # msg.text is already str in this pymavlink version, not bytes.
+                text = msg.text.rstrip('\x00')
                 self._latest['statustext'] = text
                 self._latest['statustext_severity'] = msg.severity
                 print(f"[ArduSub:{msg.severity}] {text}")
@@ -253,8 +301,9 @@ class MavlinkInterface:
         )
         if msg is None:
             return None
-        # param_id is a 16-byte fixed-length field padded with nulls
-        if msg.param_id.rstrip(b'\x00').decode('utf-8', errors='replace') != param_name:
+        # param_id is a 16-char fixed-length field padded with nulls;
+        # pymavlink already decodes it to str, not bytes.
+        if msg.param_id.rstrip('\x00') != param_name:
             return None
         return msg.param_value
 
@@ -283,7 +332,7 @@ class MavlinkInterface:
         )
         if msg is None:
             return None
-        if msg.param_id.rstrip(b'\x00').decode('utf-8', errors='replace') != param_name:
+        if msg.param_id.rstrip('\x00') != param_name:
             return None
         return msg.param_value
 

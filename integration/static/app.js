@@ -294,6 +294,7 @@
       const servos = ['servo1', 'servo2', 'servo3', 'servo4'].map((k) => m[k]);
       const anyServo = servos.some((v) => v != null);
       setField(telemetryGrid, 'servo', anyServo ? servos.map((v) => v ?? '-').join(' / ') : '--', !anyServo);
+      setField(telemetryGrid, 'output_bank', m.output_bank || '--', !m.output_bank || m.output_bank === 'UNKNOWN');
 
       const accelKnown = m.accel_x != null && m.accel_y != null && m.accel_z != null;
       setField(

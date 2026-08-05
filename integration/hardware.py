@@ -207,14 +207,14 @@ class HardwareManager:
         """Check safety-critical ArduSub parameters and store results.
         Called once per successful MAVLink connection (including reconnects)."""
         CHECKS = [
-            {'name': 'FRAME_TYPE', 'expected': 1, 'check': 'eq',
+            {'name': 'FRAME_CONFIG', 'expected': 1, 'check': 'eq',
              'description': 'BlueROV2 Vectored (4 horizontal thrusters; motors 5-6 vertical unconnected)'},
             {'name': 'FS_GCS_ENABLE', 'expected': 1, 'check': 'gte',
              'description': 'GCS failsafe enabled (1=warn, 2=ALT_HOLD, 3=disarm)'},
             {'name': 'ARMING_CHECK', 'expected': 0, 'check': 'neq',
              'description': 'Pre-arm checks enabled (0=disabled is unsafe)'},
-            {'name': 'FS_BATT_ENABLE', 'expected': 1, 'check': 'gte',
-             'description': 'Battery failsafe enabled'},
+            {'name': 'BATT_MONITOR', 'expected': 0, 'check': 'neq',
+             'description': 'Battery monitor configured (0=disabled, no battery failsafe possible)'},
             {'name': 'FENCE_ALT_MAX', 'expected': 0, 'check': 'gt',
              'description': 'Depth fence configured (max depth limit)'},
         ]
@@ -482,6 +482,7 @@ class HardwareManager:
             manual_power = self._manual_power
         telem = self.veh.get_telemetry_deg()
         telem['mode'] = self.veh.get_mode_name()
+        telem['output_bank'] = self.veh.get_output_bank()
         telem['control_mode'] = control_mode
         telem['control'] = control
         telem['control_age_s'] = control_age
