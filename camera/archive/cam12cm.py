@@ -47,6 +47,23 @@ def half_area_window_size(screen_w, screen_h):
     return int(screen_w * scale), int(screen_h * scale)
 
 
+def marker_yaw_from_rvec(rvec):
+    """Extract yaw (rotation about the camera's z-axis) from an ArUco
+    rotation vector. Same math as camFinal.py / pose_controller.py's
+    marker_yaw_from_rvec() -- duplicated here so this script keeps no
+    hard dependency on those files and can run standalone."""
+    rmat, _ = cv2.Rodrigues(rvec)
+    return float(np.arctan2(rmat[1, 0], rmat[0, 0]))
+
+
+# Mirrors CAMERA_MOUNT_YAW_DEG in pose_controller.py. Keep this in sync
+# with that file by hand -- it's duplicated (not imported) so this
+# script stays standalone. Used below only to print what the body-frame
+# yaw WOULD be with the current setting, so you can sanity-check/tune
+# the offset before copying it back into pose_controller.py.
+CAMERA_MOUNT_YAW_DEG = 90.0
+
+
 def load_calibration(path):
     data = np.load(path)
     return data["camera_matrix"], data["dist_coeffs"]
@@ -143,6 +160,12 @@ def main():
                          help="Multiplier applied to x,y,z after estimation, empirically "
                               "calibrated against a tape measure for this camera+marker "
                               "setup (default: 1.6)")
+    parser.add_argument("--mount-yaw-deg", type=float, default=CAMERA_MOUNT_YAW_DEG,
+                         help="Camera mounting yaw offset, degrees -- same value/meaning "
+                              "as CAMERA_MOUNT_YAW_DEG in pose_controller.py. Used here "
+                              "only to preview what body-frame yaw would be with this "
+                              "offset, so you can find the right value before copying it "
+                              f"back into pose_controller.py (default: {CAMERA_MOUNT_YAW_DEG})")
     parser.add_argument("--enhance-low-light", action="store_true", default=True,
                          help="Apply CLAHE contrast enhancement + mild denoising before "
                               "detection. Enabled by default for underwater use "
@@ -186,9 +209,19 @@ def main():
     else:
         print("Using camera auto-exposure/auto-gain")
 
-    # --- Set up ArUco detector (old-style API, for OpenCV < 4.7) ---
-    aruco_dict = cv2.aruco.Dictionary_get(ARUCO_DICTS[args.dict])
-    aruco_params = cv2.aruco.DetectorParameters_create()
+    # --- Set up ArUco detector ---
+    # OpenCV 4.7+ removed the old free-function API (Dictionary_get /
+    # DetectorParameters_create) in favor of a class-based ArucoDetector.
+    # Support both so this doesn't break depending on whatever OpenCV
+    # version happens to be installed on a given machine.
+    new_aruco_api = hasattr(cv2.aruco, 'ArucoDetector')
+
+    aruco_dict = cv2.aruco.Dictionary_get(ARUCO_DICTS[args.dict]) \
+        if hasattr(cv2.aruco, 'Dictionary_get') \
+        else cv2.aruco.getPredefinedDictionary(ARUCO_DICTS[args.dict])
+
+    aruco_params = cv2.aruco.DetectorParameters() if new_aruco_api \
+        else cv2.aruco.DetectorParameters_create()
 
     # Sub-pixel corner refinement: slightly slower per frame, but corner
     # positions are noticeably more stable/accurate, which directly improves
@@ -204,6 +237,11 @@ def main():
     aruco_params.adaptiveThreshWinSizeMin = 3
     aruco_params.adaptiveThreshWinSizeMax = 43
     aruco_params.adaptiveThreshWinSizeStep = 4
+
+    # New API needs one persistent detector object built from the
+    # dict+params; old API just calls the free function each frame
+    # with the dict+params passed in directly (nothing to build here).
+    detector_obj = cv2.aruco.ArucoDetector(aruco_dict, aruco_params) if new_aruco_api else None
 
     # --- Calibration (needed for real-world x,y,z) ---
     camera_matrix, dist_coeffs = None, None
@@ -251,7 +289,10 @@ def main():
             else:
                 detect_input = frame
 
-            corners, ids, _ = cv2.aruco.detectMarkers(detect_input, aruco_dict, parameters=aruco_params)
+            if new_aruco_api:
+                corners, ids, _ = detector_obj.detectMarkers(detect_input)
+            else:
+                corners, ids, _ = cv2.aruco.detectMarkers(detect_input, aruco_dict, parameters=aruco_params)
 
             if ids is not None:
                 now = time.time()
@@ -269,15 +310,23 @@ def main():
                         x *= args.z_correction
                         y *= args.z_correction
                         z *= args.z_correction
+                        yaw_cam_deg = math.degrees(marker_yaw_from_rvec(rvecs[i]))
+                        yaw_body_deg = yaw_cam_deg + args.mount_yaw_deg
+                        # Wrap into (-180, 180] so it reads naturally at
+                        # the +/-180 boundary instead of jumping to e.g. 350.
+                        yaw_body_deg = ((yaw_body_deg + 180) % 360) - 180
                         if should_print:
                             print(f"aruco detected: id={marker_id}  "
-                                  f"x={x:.3f}m y={y:.3f}m z={z:.3f}m")
+                                  f"x={x:.3f}m y={y:.3f}m z={z:.3f}m  "
+                                  f"yaw_cam={yaw_cam_deg:+.1f}deg  "
+                                  f"yaw_body={yaw_body_deg:+.1f}deg "
+                                  f"(mount_yaw={args.mount_yaw_deg:+.1f}deg)")
                         cv2.drawFrameAxes(frame, camera_matrix, dist_coeffs,
                                            rvecs[i], tvecs[i], args.marker_size * 0.5)
                         c = corners[i][0]
                         label_pos = (int(c[:, 0].mean()) - 40, int(c[:, 1].mean()) - 15)
-                        cv2.putText(frame, f"id={marker_id} z={z:.2f}m", label_pos,
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                        cv2.putText(frame, f"id={marker_id} z={z:.2f}m yaw={yaw_body_deg:+.0f}deg",
+                                    label_pos, cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
                 else:
                     # No calibration: only pixel-space position available
                     for i, marker_id in enumerate(ids.flatten()):
