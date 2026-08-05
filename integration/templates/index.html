@@ -93,10 +93,24 @@
 
         <div class="control-footer">
           <span class="watchdog" id="watchdog">last command: --</span>
+          <div class="flight-mode-row">
+            <label for="flight-mode-select">Flight mode:</label>
+            <select id="flight-mode-select">
+              <option value="MANUAL">MANUAL (no stabilization)</option>
+              <option value="STABILIZE">STABILIZE (auto-level roll/pitch)</option>
+            </select>
+            <button id="flight-mode-set-btn">Set</button>
+          </div>
           <div class="arm-buttons">
             <button id="arm-btn">ARM</button>
             <button id="disarm-btn">DISARM</button>
           </div>
+        </div>
+        <div class="control-hint">
+          Flight mode is ArduSub's own setting -- separate from the
+          Manual/Auto toggle above. Roll/pitch auto-leveling only runs
+          in <code>STABILIZE</code>; in <code>MANUAL</code> mode
+          thruster commands pass straight through with zero correction.
         </div>
       </div>
     </div>

@@ -133,6 +133,24 @@
     });
   });
 
+  // ---------------- ArduSub flight mode ----------------
+  // This is ArduSub's OWN flight mode (MANUAL/STABILIZE/etc), separate
+  // from this app's manual/auto control_mode toggle above.
+  const flightModeSelect = document.getElementById('flight-mode-select');
+  const flightModeSetBtn = document.getElementById('flight-mode-set-btn');
+  let userIsPickingFlightMode = false;
+
+  flightModeSelect.addEventListener('focus', () => { userIsPickingFlightMode = true; });
+  flightModeSelect.addEventListener('blur', () => { userIsPickingFlightMode = false; });
+
+  flightModeSetBtn.addEventListener('click', () => {
+    fetch('/api/mode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: flightModeSelect.value }),
+    }).catch(() => {});
+  });
+
   // ---------------- manual / auto mode toggle ----------------
   const manualPanel = document.getElementById('manual-panel');
   const autoPanel = document.getElementById('auto-panel');
