@@ -20,7 +20,7 @@
 
   <div class="layout">
     <div>
-      <div class="card">
+      <div class="card camera-card">
         <h2>Camera feed</h2>
         <div class="video-wrap">
           <img id="video" src="/video_feed" alt="camera feed"
@@ -38,6 +38,7 @@
           </div>
         </div>
 
+        <div class="mode-panels">
         <div id="manual-panel">
           <div class="power-row">
             <label for="power-slider">Power: <span id="power-value">100</span>%</label>
@@ -54,37 +55,42 @@
               <button data-key="q">&#8634; yaw</button>
               <button data-key="e">yaw &#8635;</button>
             </div>
+            <div class="control-hint control-hint-inline">
+              Keys <code>W</code>/<code>S</code> surge, <code>A</code>/<code>D</code> sway,
+              <code>Q</code>/<code>E</code> yaw. Heave is fixed neutral (no vertical thrusters).
+              Sticks zero automatically if this page stops sending for 0.5s.
+              Power slider scales thruster output and is enforced on the Pi, not
+              just this page -- resets to 100% whenever the Pi service restarts.
+            </div>
           </div>
           <div class="stick-readout" id="stick-readout">x=0.00 y=0.00 r=0.00</div>
-          <div class="control-hint">
-            Keys <code>W</code>/<code>S</code> surge, <code>A</code>/<code>D</code> sway,
-            <code>Q</code>/<code>E</code> yaw. Heave is fixed neutral (no vertical thrusters).
-            Sticks zero automatically if this page stops sending for 0.5s.
-            Power slider scales thruster output and is enforced on the Pi, not
-            just this page -- resets to 100% whenever the Pi service restarts.
-          </div>
         </div>
 
-        <div id="auto-panel" style="display:none;">
-          <div class="stat-grid">
-            <div class="stat-tile"><div class="label">State</div><div class="value na" data-field="auto-state">--</div></div>
-            <div class="stat-tile"><div class="label">Controlling</div><div class="value na" data-field="auto-controlling">--</div></div>
+        <div id="auto-panel" style="visibility:hidden;">
+          <div class="auto-status-row">
+            <div class="stat-grid auto-stat-grid">
+              <div class="stat-tile"><div class="label">State</div><div class="value na" data-field="auto-state">--</div></div>
+              <div class="stat-tile"><div class="label">Controlling</div><div class="value na" data-field="auto-controlling">--</div></div>
+            </div>
+            <div class="auto-readouts">
+              <div class="stick-readout" id="auto-stick-readout">x=0.00 y=0.00 r=0.00</div>
+              <div class="stick-readout" id="yaw-debug-readout">yaw: cam=-- body=--</div>
+            </div>
+            <div class="control-hint control-hint-inline">
+              The net is following the ArUco marker autonomously. States progress
+              SEARCHING &rarr; DETECTED &rarr; ALIGNING &rarr; READY &rarr; RECOVERING.
+              RECOVERING is terminal (assumes capture) -- switch to Manual and back
+              to Auto to reset if this triggers unintentionally during testing.
+            </div>
           </div>
-          <div class="stick-readout" id="auto-stick-readout">x=0.00 y=0.00 r=0.00</div>
-          <div class="stick-readout" id="yaw-debug-readout">yaw: cam=-- body=--</div>
-          <div class="control-hint" id="yaw-saturated-hint" style="display:none; color:#e0a030;">
+          <div class="control-hint" id="yaw-saturated-hint" style="display:none; color:#e0a030; margin-top:6px;">
             Yaw stick is pinned at its limit regardless of marker orientation --
             this usually means CAMERA_MOUNT_YAW_DEG in pose_controller.py doesn't
             match your mounting. Compare "cam" and "body" yaw above: with the
             marker held facing straight into the camera, body yaw should read
             close to 0&deg;. Adjust CAMERA_MOUNT_YAW_DEG until it does.
           </div>
-          <div class="control-hint">
-            The net is following the ArUco marker autonomously. States progress
-            SEARCHING &rarr; DETECTED &rarr; ALIGNING &rarr; READY &rarr; RECOVERING.
-            RECOVERING is terminal (assumes capture) -- switch to Manual and back
-            to Auto to reset if this triggers unintentionally during testing.
-          </div>
+        </div>
         </div>
 
         <div class="control-footer">
@@ -112,7 +118,7 @@
       </div>
     </div>
 
-    <div>
+    <div class="data-column">
       <div class="card">
         <h2>Pixhawk telemetry</h2>
         <div class="stat-grid" id="telemetry-grid">
@@ -127,7 +133,7 @@
           <div class="stat-tile"><div class="label">Accel X/Y/Z (m/s&sup2;)</div><div class="value na" data-field="accel">--</div></div>
         </div>
         <div>
-          <div class="label" style="font-size:11px; color:var(--text-muted); text-transform:uppercase; margin-top:14px;">Tilt from level</div>
+          <div class="label" style="font-size:10px; color:var(--text-muted); text-transform:uppercase; margin-top:8px;">Tilt from level</div>
           <div class="meter-track"><div class="meter-fill" id="tilt-fill" style="width:0%"></div></div>
         </div>
       </div>

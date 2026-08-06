@@ -34,20 +34,29 @@
 
 * { box-sizing: border-box; }
 
+html, body {
+  height: 100%;
+}
+
 body {
   margin: 0;
   background: var(--page-plane);
   color: var(--text-primary);
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
   font-size: 14px;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
 }
 
 header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 14px 20px;
+  padding: 8px 16px;
   border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
 }
 
 header h1 {
@@ -65,31 +74,43 @@ header h1 span {
 .layout {
   display: grid;
   grid-template-columns: minmax(0, 1.4fr) minmax(280px, 1fr);
-  gap: 16px;
-  padding: 16px;
+  gap: 10px;
+  padding: 10px;
   max-width: 1200px;
   margin: 0 auto;
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  overflow: hidden;
+}
+
+.layout > div {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  height: 100%;
+  overflow-y: auto;
 }
 
 @media (max-width: 860px) {
-  .layout { grid-template-columns: 1fr; }
+  .layout { grid-template-columns: 1fr; overflow-y: auto; }
+  .layout > div { overflow: visible; height: auto; }
 }
 
 .card {
   background: var(--surface-1);
   border: 1px solid var(--border);
   border-radius: 10px;
-  padding: 16px;
+  padding: 12px;
 }
 
-.card + .card { margin-top: 16px; }
-
 .card h2 {
-  font-size: 12px;
+  font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--text-muted);
-  margin: 0 0 12px;
+  margin: 0 0 8px;
   font-weight: 600;
 }
 
@@ -127,12 +148,43 @@ header h1 span {
 
 /* ---------------- camera ---------------- */
 
+.camera-card {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.layout > div > .card:not(.camera-card) {
+  flex: 0 0 auto;
+}
+
+.data-column > .card {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.data-column > .card > .stat-grid {
+  flex: 1 1 auto;
+  min-height: 0;
+  grid-auto-rows: 1fr;
+}
+
+.data-column > .card .stat-tile {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
 .video-wrap {
   position: relative;
   background: #000;
   border-radius: 8px;
   overflow: hidden;
-  aspect-ratio: 16 / 9;
+  flex: 1 1 auto;
+  min-height: 120px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -155,30 +207,35 @@ header h1 span {
 .stat-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
-  gap: 10px;
+  gap: 6px;
+}
+
+#telemetry-grid {
+  grid-template-columns: repeat(3, 1fr);
 }
 
 .stat-tile {
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 10px 12px;
+  padding: 6px 8px;
 }
 
 .stat-tile .label {
-  font-size: 11px;
+  font-size: 9px;
   color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
 
 .stat-tile .value {
-  font-size: 20px;
+  font-size: 15px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
-  margin-top: 2px;
+  margin-top: 1px;
+  line-height: 1.25;
 }
 
-.stat-tile .value.na { color: var(--text-muted); font-size: 16px; }
+.stat-tile .value.na { color: var(--text-muted); font-size: 13px; }
 
 /* ---------------- meter (tilt) ---------------- */
 
@@ -206,7 +263,7 @@ header h1 span {
   display: flex;
   align-items: center;
   gap: 12px;
-  margin-bottom: 14px;
+  margin-bottom: 8px;
 }
 
 .power-row label {
@@ -221,6 +278,15 @@ header h1 span {
   accent-color: var(--series-blue);
 }
 
+.mode-panels {
+  display: grid;
+}
+
+.mode-panels > div {
+  grid-area: 1 / 1;
+  min-width: 0;
+}
+
 .control-row {
   display: flex;
   gap: 16px;
@@ -229,14 +295,14 @@ header h1 span {
 
 .dpad {
   display: grid;
-  grid-template-columns: repeat(3, 48px);
-  grid-template-rows: repeat(2, 48px);
-  gap: 6px;
+  grid-template-columns: repeat(3, 38px);
+  grid-template-rows: repeat(2, 38px);
+  gap: 5px;
 }
 
 .dpad button {
   font: inherit;
-  font-size: 16px;
+  font-size: 14px;
   border-radius: 8px;
   border: 1px solid var(--border);
   background: var(--page-plane);
@@ -261,14 +327,14 @@ header h1 span {
 .yaw-pad {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 5px;
 }
 
 .yaw-pad button {
   font: inherit;
-  font-size: 13px;
-  width: 64px;
-  height: 40px;
+  font-size: 12px;
+  width: 58px;
+  height: 34px;
   border-radius: 8px;
   border: 1px solid var(--border);
   background: var(--page-plane);
@@ -286,10 +352,17 @@ header h1 span {
 }
 
 .control-hint {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--text-muted);
-  margin-top: 10px;
-  line-height: 1.5;
+  margin-top: 6px;
+  line-height: 1.4;
+}
+
+.control-hint-inline {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-top: 0;
+  align-self: center;
 }
 
 .control-hint code {
@@ -341,7 +414,7 @@ header h1 span {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-top: 14px;
+  margin-top: 8px;
   gap: 10px;
   flex-wrap: wrap;
 }
@@ -393,7 +466,7 @@ header h1 span {
   font: inherit;
   font-weight: 600;
   font-size: 13px;
-  padding: 9px 16px;
+  padding: 7px 14px;
   border-radius: 8px;
   border: 1px solid var(--border);
   cursor: pointer;
@@ -418,4 +491,28 @@ header h1 span {
   color: var(--text-secondary);
   font-variant-numeric: tabular-nums;
   margin-top: 10px;
+}
+
+.auto-status-row {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.auto-stat-grid {
+  flex: 0 0 auto;
+  grid-template-columns: repeat(2, 108px);
+}
+
+.auto-readouts {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.auto-readouts .stick-readout {
+  margin-top: 0;
 }

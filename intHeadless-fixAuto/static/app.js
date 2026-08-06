@@ -150,8 +150,8 @@
     currentMode = mode;
     modeManualBtn.classList.toggle('active', mode === 'manual');
     modeAutoBtn.classList.toggle('active', mode === 'auto');
-    manualPanel.style.display = mode === 'manual' ? '' : 'none';
-    autoPanel.style.display = mode === 'auto' ? '' : 'none';
+    manualPanel.style.visibility = mode === 'manual' ? 'visible' : 'hidden';
+    autoPanel.style.visibility = mode === 'auto' ? 'visible' : 'hidden';
     if (mode !== 'manual') {
       active.clear();
       updateButtonVisuals();
