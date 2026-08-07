@@ -44,7 +44,12 @@ import time
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _INTEGRATION_DIR = os.path.abspath(os.path.join(_THIS_DIR, '..', 'integration'))
 if _INTEGRATION_DIR not in sys.path:
-    sys.path.insert(0, _INTEGRATION_DIR)
+    # Append, not insert(0, ...): this directory's own copies of these
+    # modules (which may have local fixes/changes) must take priority
+    # over integration/'s -- otherwise imports silently resolve to the
+    # wrong file whenever both directories have a module of the same
+    # name (e.g. external_sensors.py, mavlink_interface.py).
+    sys.path.append(_INTEGRATION_DIR)
 
 import math
 
@@ -420,9 +425,10 @@ class HardwareManager:
             return self._latest_jpeg
 
     # ------------------------------------------------------------------
-    # external sensors: ICM20948 + SOS leak sensor, independent of the
-    # Pixhawk entirely -- same reconnect-on-failure pattern as the
-    # other two threads.
+    # external sensors: SOS leak sensor, independent of the Pixhawk
+    # entirely -- same reconnect-on-failure pattern as the other two
+    # threads. (Used to also read an external ICM20948 IMU as a
+    # cross-check; removed by design decision -- Pixhawk IMU only now.)
     # ------------------------------------------------------------------
     def _external_thread(self):
         RECONNECT_DELAY_S = 3.0
