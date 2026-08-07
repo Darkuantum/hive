@@ -454,8 +454,8 @@ def main():
                             help="Enable SK9822/APA102 LED strip control (default ON). --no-led "
                                  "to skip LED setup entirely -- e.g. if the strip isn't wired up "
                                  "yet and you only want to tune camera/pipeline parameters for now.")
-    led_group.add_argument("--led-num-pixels", type=int, default=8,
-                            help="Number of LEDs on the strip (default: 8)")
+    led_group.add_argument("--led-num-pixels", type=int, default=10,
+                            help="Number of LEDs on the strip (default: 10)")
     led_group.add_argument("--led-brightness", type=float, default=0.3,
                             help="Starting LED brightness, 0.0-1.0 (default: 0.3). Start low "
                                  "underwater -- backscatter off suspended particles gets worse "
