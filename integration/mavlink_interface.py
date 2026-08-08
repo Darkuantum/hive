@@ -26,6 +26,7 @@ Usage:
 
 import time
 import math
+import threading
 from pymavlink import mavutil
 
 
@@ -48,10 +49,21 @@ class MavlinkInterface:
             'armed': False,
             'custom_mode': None,
             'accel_x': None, 'accel_y': None, 'accel_z': None,  # m/s^2, from SCALED_IMU2
-            # Raw PWM per MAIN OUT channel (1-4 = your thrusters, 5-6 unused)
+            # Raw PWM/DShot-equivalent value per thruster (servo1-4) and
+            # per unused vertical output (servo5-6, always literal MAIN5-6).
+            # servo1-4 are NOT literal MAIN1-4 -- they track wherever
+            # Motor1-4 actually live, MAIN or AUX, via _motor_channels
+            # (see _detect_motor_channels()).
             'servo1': None, 'servo2': None, 'servo3': None,
             'servo4': None, 'servo5': None, 'servo6': None,
+            'statustext': None, 'statustext_severity': None,
+            'battery_voltage': None, 'battery_current': None,
+            'battery_remaining': None,
         }
+        self._latest_lock = threading.Lock()
+        # {motor_num (1-4): physical output channel}, populated by
+        # _detect_motor_channels() on connect. Empty until then.
+        self._motor_channels = {}
 
     # ------------------------------------------------------------------
     # Connection
@@ -60,7 +72,7 @@ class MavlinkInterface:
         """Open the connection and block until the first heartbeat arrives."""
         print(f"Connecting to {self.connection_string} ...")
         self.master = mavutil.mavlink_connection(
-            self.connection_string, baud=self.baud
+            self.connection_string, baud=self.baud, robust_parsing=True
         )
 
         print("Waiting for heartbeat...")
@@ -75,6 +87,45 @@ class MavlinkInterface:
             f"component {self.master.target_component})"
         )
         self._request_streams()
+        self._detect_motor_channels()
+
+    # SERVOx_FUNCTION values ArduPilot uses for Motor1-4
+    _MOTOR_FUNCTION_IDS = {33: 1, 34: 2, 35: 3, 36: 4}
+
+    def _detect_motor_channels(self, max_channel=16):
+        """Find which physical output channel currently drives each of
+        Motor1-4, by reading SERVOx_FUNCTION for channels 1..max_channel.
+        SERVO_OUTPUT_RAW (and DShot itself) is indexed by raw channel
+        number, not motor number, so this is what lets telemetry stay
+        correct whether the thrusters are wired to MAIN (1-8) or AUX
+        (9-14) -- see get_output_bank()."""
+        found = {}
+        for chan in range(1, max_channel + 1):
+            val = self.read_param(f'SERVO{chan}_FUNCTION', timeout=1.5)
+            if val is not None and int(val) in self._MOTOR_FUNCTION_IDS:
+                found[self._MOTOR_FUNCTION_IDS[int(val)]] = chan
+            if len(found) == 4:
+                break
+        with self._latest_lock:
+            self._motor_channels = found
+
+    def get_motor_channels(self):
+        """{motor_num: physical output channel}, e.g. {1: 1, 2: 2, 3: 3,
+        4: 4} on MAIN or {1: 11, 2: 12, 3: 13, 4: 14} on AUX. May have
+        fewer than 4 entries if a motor's output couldn't be found."""
+        with self._latest_lock:
+            return dict(self._motor_channels)
+
+    def get_output_bank(self):
+        """Best-effort label for where Motor1-4 currently live: 'MAIN'
+        if every detected channel is 1-8, 'AUX' if every one is 9+,
+        'MIXED' if split across both (unusual), 'UNKNOWN' if detection
+        hasn't run yet or didn't find all 4."""
+        chans = list(self.get_motor_channels().values())
+        if len(chans) < 4:
+            return 'UNKNOWN'
+        banks = {'MAIN' if c <= 8 else 'AUX' for c in chans}
+        return banks.pop() if len(banks) == 1 else 'MIXED'
 
     def _request_streams(self, rate_hz=10):
         """Ask ArduSub to stream ATTITUDE and VFR_HUD at a known rate.
@@ -87,6 +138,7 @@ class MavlinkInterface:
             mavutil.mavlink.MAVLINK_MSG_ID_SCALED_PRESSURE2,
             mavutil.mavlink.MAVLINK_MSG_ID_SCALED_PRESSURE,
             mavutil.mavlink.MAVLINK_MSG_ID_SCALED_IMU2,
+            mavutil.mavlink.MAVLINK_MSG_ID_SYS_STATUS,
         ]:
             self.master.mav.command_long_send(
                 self.master.target_system, self.master.target_component,
@@ -120,15 +172,16 @@ class MavlinkInterface:
                 self._latest['depth'] = msg.alt
 
             elif msg_type == 'SERVO_OUTPUT_RAW':
-                # Raw PWM (microseconds) currently being sent to each
-                # MAIN OUT channel. 1500 = neutral/no thrust, values above
-                # or below that indicate thrust direction and magnitude.
-                self._latest['servo1'] = msg.servo1_raw
-                self._latest['servo2'] = msg.servo2_raw
-                self._latest['servo3'] = msg.servo3_raw
-                self._latest['servo4'] = msg.servo4_raw
+                # Raw PWM/DShot-equivalent value (microseconds). 1500 =
+                # neutral/no thrust, values above or below indicate
+                # thrust direction and magnitude. servo1-4 are read from
+                # whichever channel _detect_motor_channels() found for
+                # each motor (MAIN or AUX); servo5-6 are always the
+                # literal, unused vertical MAIN outputs.
                 self._latest['servo5'] = msg.servo5_raw
                 self._latest['servo6'] = msg.servo6_raw
+                for motor_num, chan in self._motor_channels.items():
+                    self._latest[f'servo{motor_num}'] = getattr(msg, f'servo{chan}_raw', None)
 
             elif msg_type == 'SCALED_PRESSURE2':
                 # press_abs is in hPa (equivalent to mbar). temperature is
@@ -151,6 +204,18 @@ class MavlinkInterface:
                 self._latest['accel_x'] = msg.xacc / 1000.0 * 9.80665
                 self._latest['accel_y'] = msg.yacc / 1000.0 * 9.80665
                 self._latest['accel_z'] = msg.zacc / 1000.0 * 9.80665
+
+            elif msg_type == 'STATUSTEXT':
+                # msg.text is already str in this pymavlink version, not bytes.
+                text = msg.text.rstrip('\x00')
+                self._latest['statustext'] = text
+                self._latest['statustext_severity'] = msg.severity
+                print(f"[ArduSub:{msg.severity}] {text}")
+
+            elif msg_type == 'SYS_STATUS':
+                self._latest['battery_voltage'] = msg.voltage_battery / 1000.0
+                self._latest['battery_current'] = msg.current_battery / 100.0
+                self._latest['battery_remaining'] = msg.battery_remaining
 
             elif msg_type == 'HEARTBEAT':
                 self._latest['armed'] = bool(
@@ -177,7 +242,16 @@ class MavlinkInterface:
 
     def get_telemetry(self):
         """Return the latest known telemetry snapshot (raw units --
-        radians for angles, as MAVLink and your PID math expect)."""
+        radians for angles, as MAVLink and your PID math expect).
+
+        Thread safety: we rely on CPython's GIL here rather than an
+        explicit lock.  Each ``self._latest[key] = value`` in update()
+        is a single bytecode op (atomic under the GIL), and the key set
+        is fixed at __init__ (never grows/shrinks at runtime), so
+        ``dict(self._latest)`` cannot hit 'dictionary changed size
+        during iteration'.  The worst case is a snapshot that mixes
+        values from two adjacent telemetry messages, which is benign
+        for monotonically-updating sensor data."""
         return dict(self._latest)
 
     def get_telemetry_deg(self):
@@ -204,6 +278,109 @@ class MavlinkInterface:
             t['tilt_deg'] = None
 
         return t
+
+    # ------------------------------------------------------------------
+    # Parameter management
+    # ------------------------------------------------------------------
+    def read_param(self, param_name, timeout=2.0):
+        """Request a single parameter value from ArduSub and return it.
+
+        Sends PARAM_REQUEST_READ, waits for the matching PARAM_VALUE
+        response, and returns the float value.  Returns None if the
+        response doesn't arrive within *timeout* seconds or the
+        returned param_id doesn't match.
+        """
+        self.master.mav.param_request_read_send(
+            self.master.target_system,
+            self.master.target_component,
+            param_name.encode('utf-8'),
+            -1,
+        )
+        msg = self.master.recv_match(
+            type='PARAM_VALUE', blocking=True, timeout=timeout,
+        )
+        if msg is None:
+            return None
+        # param_id is a 16-char fixed-length field padded with nulls;
+        # pymavlink already decodes it to str, not bytes.
+        if msg.param_id.rstrip('\x00') != param_name:
+            return None
+        return msg.param_value
+
+    def set_param(self, param_name, value, param_type=None):
+        """Set a parameter on the vehicle and wait for confirmation.
+
+        Sends PARAM_SET and waits for the PARAM_VALUE echo that
+        ArduSub sends back to confirm the write.
+
+        The vehicle should be disarmed when changing most parameters;
+        some params also require a reboot before they take effect.
+        Returns the confirmed value (float) on success, or None on
+        timeout.
+        """
+        if param_type is None:
+            param_type = mavutil.mavlink.MAV_PARAM_TYPE_REAL32
+        self.master.mav.param_set_send(
+            self.master.target_system,
+            self.master.target_component,
+            param_name.encode('utf-8'),
+            float(value),
+            param_type,
+        )
+        msg = self.master.recv_match(
+            type='PARAM_VALUE', blocking=True, timeout=2.0,
+        )
+        if msg is None:
+            return None
+        if msg.param_id.rstrip('\x00') != param_name:
+            return None
+        return msg.param_value
+
+    def verify_params(self, checks):
+        """Verify a list of ArduSub parameters against expected values.
+
+        *checks* is a list of dicts, each with keys:
+            name        – parameter name (str)
+            expected    – expected value (numeric)
+            check       – comparison operator: 'eq', 'gte', 'gt', 'neq'
+            description – human-readable label
+
+        Returns a list of result dicts with keys:
+            name, expected, actual (float or None), ok (bool),
+            description, error (str, present only on failure).
+        """
+        results = []
+        for chk in checks:
+            name = chk['name']
+            expected = chk['expected']
+            op = chk.get('check', 'eq')
+            actual = self.read_param(name)
+            entry = {
+                'name': name,
+                'expected': expected,
+                'actual': actual,
+                'ok': False,
+                'description': chk.get('description', ''),
+            }
+            if actual is None:
+                entry['error'] = 'read failed'
+            else:
+                if op == 'eq':
+                    entry['ok'] = (actual == expected)
+                elif op == 'gte':
+                    entry['ok'] = (actual >= expected)
+                elif op == 'gt':
+                    entry['ok'] = (actual > expected)
+                elif op == 'neq':
+                    entry['ok'] = (actual != expected)
+                else:
+                    entry['error'] = f"unknown check operator: {op!r}"
+                if not entry['ok'] and 'error' not in entry:
+                    entry['error'] = (
+                        f"expected {op} {expected}, got {actual}"
+                    )
+            results.append(entry)
+        return results
 
     # ------------------------------------------------------------------
     # Mode / arming
@@ -249,6 +426,10 @@ class MavlinkInterface:
             mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM,
             0, 1, 0, 0, 0, 0, 0, 0,
         )
+        ack = self.master.recv_match(type='COMMAND_ACK', blocking=True, timeout=2)
+        if ack is None:
+            return None
+        return ack.result  # 0 = MAV_RESULT_ACCEPTED
 
     def disarm(self):
         self.master.mav.command_long_send(
@@ -256,6 +437,10 @@ class MavlinkInterface:
             mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM,
             0, 0, 0, 0, 0, 0, 0, 0,
         )
+        ack = self.master.recv_match(type='COMMAND_ACK', blocking=True, timeout=2)
+        if ack is None:
+            return None
+        return ack.result  # 0 = MAV_RESULT_ACCEPTED
 
     # ------------------------------------------------------------------
     # Commanding motion (the PID output from the decision engine lands here)
@@ -286,20 +471,15 @@ class MavlinkInterface:
             to_1000(r), buttons,
         )
 
-    def send_velocity(self, vx=0.0, vy=0.0, vz=0.0, yaw_rate=0.0):
-        """Send a body-frame velocity setpoint. vx = surge (forward+),
-        vy = sway (right+), vz = heave (down+, leave 0 -- no vertical
-        thrusters), yaw_rate = rotation in rad/s. Requires GUIDED mode."""
-        type_mask = 0b0000011111000111  # ignore position, accel, yaw(abs)
-        self.master.mav.set_position_target_local_ned_send(
-            0,
-            self.master.target_system, self.master.target_component,
-            mavutil.mavlink.MAV_FRAME_BODY_NED,
-            type_mask,
-            0, 0, 0,          # position (ignored)
-            vx, vy, vz,       # velocity
-            0, 0, 0,          # acceleration (ignored)
-            0, yaw_rate,      # yaw, yaw_rate
+
+    def send_statustext(self, text, severity=None):
+        """Send a STATUSTEXT message to the Pixhawk (appears in its log
+        and QGroundControl).  severity is a MAV_SEVERITY constant; defaults
+        to INFO if None."""
+        if severity is None:
+            severity = mavutil.mavlink.MAV_SEVERITY_INFO
+        self.master.mav.statustext_send(
+            severity, text.encode('utf-8')[:50],
         )
 
 

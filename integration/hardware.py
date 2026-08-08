@@ -40,12 +40,13 @@ import math
 import threading
 import time
 
+from pymavlink import mavutil
 from mavlink_interface import MavlinkInterface
 from pose_controller import PoseController, camera_to_body_yaw
 from decision_engine import DecisionEngine
 
 CONTROL_TIMEOUT_S = 0.5    # manual mode only: zero sticks if nothing posted for this long
-CONTROL_RATE_HZ = 10
+CONTROL_RATE_HZ = 20
 CAMERA_JPEG_QUALITY = 80
 DEFAULT_MANUAL_POWER = 1.0  # 100% -- manual-mode thruster scale, resets here on every connect
 
@@ -58,7 +59,9 @@ def _clamp(v, lo=-1.0, hi=1.0):
 
 class HardwareManager:
     def __init__(self, mavlink_conn='/dev/serial0', mavlink_baud=57600,
-                 enable_camera=True, camera_kwargs=None, enable_external=True):
+                 enable_camera=True, camera_kwargs=None, enable_external=True,
+                 enable_led=True, num_leds=8,
+                 pose_controller_kw=None, engine_kw=None):
         self.enable_camera = enable_camera
         self.enable_external = enable_external
 
@@ -78,11 +81,22 @@ class HardwareManager:
             from external_sensors import ExternalSensors
             self.external = ExternalSensors()
 
+        self.led = None
+        if enable_led:
+            try:
+                from led_controller import LEDController
+                self.led = LEDController(num_pixels=num_leds)
+            except Exception as exc:
+                print(f"LED controller unavailable: {exc}")
+
         self._lock = threading.Lock()
         self._mavlink_status = {'connected': False, 'error': None}
         self._camera_status = {'connected': False, 'error': None}
         self._external_status = {'connected': False, 'error': None}
         self._latest_external = None
+
+        self._param_status = None
+        self._param_status_lock = threading.Lock()
 
         # ---- manual mode state ----
         self._control = {'x': 0.0, 'y': 0.0, 'r': 0.0}
@@ -93,11 +107,13 @@ class HardwareManager:
         # Enforced here server-side, not just in the UI, so a stale page
         # or a bypassed slider can't push more power than intended.
         self._manual_power = DEFAULT_MANUAL_POWER
+        self._led_manual_brightness = 0.5
+        self._last_led_engine_state = None  # for backward-transition detection
 
         # ---- mode + auto mode state ----
         self._mode = 'manual'
-        self.controller = PoseController()
-        self.engine = DecisionEngine()
+        self.controller = PoseController(**(pose_controller_kw or {}))
+        self.engine = DecisionEngine(**(engine_kw or {}))
         self._auto_status = {
             'state': self.engine.state.name,
             'controlling': False,
@@ -127,6 +143,14 @@ class HardwareManager:
         for t in self._threads:
             t.start()
 
+        # Handle SIGTERM for clean shutdown (SIGINT is handled by
+        # Flask's KeyboardInterrupt -> finally: manager.stop())
+        import signal
+        def _on_signal(signum, frame):
+            self.stop()
+            raise SystemExit(0)
+        signal.signal(signal.SIGTERM, _on_signal)
+
     def stop(self):
         self._stop.set()
         for t in self._threads:
@@ -135,6 +159,8 @@ class HardwareManager:
             self.detector.stop()
         if self.external is not None:
             self.external.stop()
+        if self.led is not None:
+            self.led.off()
 
     # ------------------------------------------------------------------
     # mode switching
@@ -175,6 +201,54 @@ class HardwareManager:
             return self._mode
 
     # ------------------------------------------------------------------
+    # parameter verification
+    # ------------------------------------------------------------------
+    def _verify_startup_params(self):
+        """Check safety-critical ArduSub parameters and store results.
+        Called once per successful MAVLink connection (including reconnects)."""
+        CHECKS = [
+            {'name': 'FRAME_CONFIG', 'expected': 1, 'check': 'eq',
+             'description': 'BlueROV2 Vectored (4 horizontal thrusters; motors 5-6 vertical unconnected)'},
+            {'name': 'FS_GCS_ENABLE', 'expected': 1, 'check': 'gte',
+             'description': 'GCS failsafe enabled (1=warn, 2=ALT_HOLD, 3=disarm)'},
+            {'name': 'ARMING_CHECK', 'expected': 0, 'check': 'neq',
+             'description': 'Pre-arm checks enabled (0=disabled is unsafe)'},
+            {'name': 'BATT_MONITOR', 'expected': 0, 'check': 'neq',
+             'description': 'Battery monitor configured (0=disabled, no battery failsafe possible)'},
+            {'name': 'FENCE_ALT_MAX', 'expected': 0, 'check': 'gt',
+             'description': 'Depth fence configured (max depth limit)'},
+        ]
+        try:
+            results = self.veh.verify_params(CHECKS)
+            with self._param_status_lock:
+                self._param_status = results
+        except Exception as exc:
+            with self._param_status_lock:
+                self._param_status = [
+                    {'name': 'verification', 'expected': None, 'actual': None,
+                     'ok': False, 'description': 'Parameter verification',
+                     'error': f'exception: {exc}'},
+                ]
+        # Print a summary to the console
+        with self._param_status_lock:
+            status = self._param_status
+        if status:
+            print("=== Parameter verification ===")
+            for r in status:
+                tag = "OK" if r['ok'] else "FAIL"
+                print(f"  [{tag}] {r['name']}: "
+                      f"expected={r['expected']}, actual={r['actual']}"
+                      + (f" ({r.get('error', '')})" if r.get('error') else ""))
+            all_ok = all(r['ok'] for r in status)
+            print(f"=== {len(status)} checks, {'ALL PASS' if all_ok else 'SOME FAILED'} ===")
+
+    def get_param_status(self):
+        """Return the latest parameter verification results (list of dicts),
+        or None if verification hasn't run yet."""
+        with self._param_status_lock:
+            return self._param_status
+
+    # ------------------------------------------------------------------
     # mavlink: telemetry in, sticks out (manual or auto), watchdog inline
     # ------------------------------------------------------------------
     def _mavlink_thread(self):
@@ -185,6 +259,9 @@ class HardwareManager:
                 self.veh.connect()
                 with self._lock:
                     self._mavlink_status = {'connected': True, 'error': None}
+
+                # Verify safety-critical parameters once per successful connect
+                self._verify_startup_params()
             except Exception as exc:
                 with self._lock:
                     self._mavlink_status = {'connected': False, 'error': str(exc)}
@@ -202,11 +279,63 @@ class HardwareManager:
                     loop_start = time.time()
                     self.veh.update(blocking=False)
 
+                    # Leak failsafe: disarm immediately if the hull is wet
+                    if self.enable_external:
+                        ext = self.get_external_telemetry()
+                        if ext and ext.get('leak'):
+                            try:
+                                # Zero sticks FIRST, then disarm — defense in depth.
+                                # If disarm is rejected or its ACK is lost, the motors
+                                # still get a neutral command instead of running on
+                                # the operator's last nonzero stick input.
+                                self.veh.send_manual_control(x=0.0, y=0.0, z=0.5, r=0.0)
+                                self.veh.disarm()
+                                self.veh.send_statustext(
+                                    "LEAK DETECTED - auto-disarmed",
+                                    severity=mavutil.mavlink.MAV_SEVERITY_EMERGENCY,
+                                )
+                            except Exception:
+                                pass
+                            if self.led is not None:
+                                self.led.set_state('leak')
+                                self.led.update()
+                            with self._lock:
+                                self._mavlink_status['error'] = 'LEAK DETECTED - disarmed'
+                            time.sleep(1.0)
+                            continue
+
                     mode = self.get_control_mode()
                     if mode == 'auto':
                         x, y, r = self._compute_auto_control()
                     else:
                         x, y, r = self._current_manual_control()
+
+                    # Update LED status indicator
+                    if self.led is not None:
+                        error_state = None
+                        if self._latest_external and self._latest_external.get('leak'):
+                            error_state = 'leak'
+                        elif not self._mavlink_status.get('connected'):
+                            error_state = 'disconnected'
+
+                        if error_state:
+                            self.led.set_state(error_state)
+                            self._last_led_engine_state = None
+                        elif mode == 'auto':
+                            engine_state = self.engine.state.name
+                            # Detect backward transition (marker lost, etc.)
+                            _ORDER = ['SEARCHING', 'DETECTED', 'ALIGNING', 'READY', 'RECOVERING']
+                            if (self._last_led_engine_state in _ORDER
+                                    and engine_state in _ORDER
+                                    and _ORDER.index(engine_state) < _ORDER.index(self._last_led_engine_state)):
+                                self.led.flash_failure(1.5)
+                            self._last_led_engine_state = engine_state
+                            self.led.set_state(engine_state)
+                        else:
+                            self.led.set_state('manual')
+                            self._last_led_engine_state = None
+
+                        self.led.update()
 
                     self.veh.send_manual_control(x=x, y=y, z=0.5, r=r)
                     with self._lock:
@@ -318,6 +447,16 @@ class HardwareManager:
         with self._lock:
             return self._manual_power
 
+    def set_led_brightness(self, brightness):
+        """Manual-mode LED brightness (0.0-1.0). Called from web UI."""
+        if self.led is not None:
+            self.led.set_manual_brightness(brightness)
+
+    def get_led_brightness(self):
+        if self.led is not None:
+            return self.led._manual_brightness
+        return 0.5
+
     def arm(self):
         self.veh.arm()
 
@@ -343,6 +482,7 @@ class HardwareManager:
             manual_power = self._manual_power
         telem = self.veh.get_telemetry_deg()
         telem['mode'] = self.veh.get_mode_name()
+        telem['output_bank'] = self.veh.get_output_bank()
         telem['control_mode'] = control_mode
         telem['control'] = control
         telem['control_age_s'] = control_age
@@ -412,9 +552,10 @@ class HardwareManager:
             return self._latest_jpeg
 
     # ------------------------------------------------------------------
-    # external sensors: ICM20948 + SOS leak sensor, independent of the
-    # Pixhawk entirely -- same reconnect-on-failure pattern as the
-    # other two threads.
+    # external sensors: SOS leak sensor, independent of the Pixhawk
+    # entirely -- same reconnect-on-failure pattern as the other two
+    # threads. (Used to also read an external ICM20948 IMU as a
+    # cross-check; removed by design decision -- Pixhawk IMU only now.)
     # ------------------------------------------------------------------
     def _external_thread(self):
         RECONNECT_DELAY_S = 3.0

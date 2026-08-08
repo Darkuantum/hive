@@ -39,31 +39,31 @@ software ever runs.
 ## System architecture
 
 A single Raspberry Pi 4 runs the entire loop as a DIY autopilot. The team
-deliberately chose to write the control loop itself rather than run a ready
-autopilot (Blue Robotics Navigator / ArduSub on a Pixhawk), because the
-sensor suite is small, the loop is legible, and it saves the cost of a marine
-controller board.
+A single Raspberry Pi 4 runs the vision processing and upper-level control
+loop, sending MANUAL_CONTROL body-frame stick commands to a Pixhawk 1 running
+ArduSub over MAVLink serial. ArduSub's vectored frame mixer handles thrust
+allocation to the four ESCs.
 
 ```
                        sense                 decide                     act
-  IMX291 USB camera -- ArUco pose error ---+
-  ICM-20948 IMU     -- attitude/heading ---+--> state --> PID per axis --> thrust --> PCA9685 --> 4x AM32 --> 4x T500
-  (I2C 0x68/0x69)      rate, mag fusion     |   estimate  (surge, sway,   allocation  (PWM)       ESC        thruster
-                                            |             heave, yaw)     matrix
-  Bar02 (MS5837-02BA) depth -- depth ---------------+                                          |
-  (I2C 0x76)                                                                              |
-                                                                                         v
-                                                                          fail-to-stop watchdog:
-                                                                          vision lost / NaN / stall
-                                                                          -> all thrusters neutral
+  IMX708 CSI camera -- ArUco pose error ---+
+  ICM-20948 IMU     -- attitude/heading ---+--> Pi PID --> MANUAL_CONTROL --> Pixhawk/ArduSub --> 4x AM32 --> 4x T500
+  (I2C 0x69)          rate, mag fusion     |   (surge,    (body-frame      (vectored frame     ESC        thruster
+                                          |    sway,      stick commands    mixer: motor
+  Bar02 (MS5837-02BA) depth -- depth -----+    yaw)       over MAVLink      allocation)
+  (via Pixhawk I2C)                                                       |
+                                                                         v
+                                                      fail-to-stop watchdog:
+                                                      leak detected / vision lost / Pi crash
+                                                      -> disarm or ArduSub GCS failsafe
 ```
 
 ### Compute and power
 | Role | Part | Note |
 |---|---|---|
-| Autopilot | Raspberry Pi 4 4GB | Headless. Owns sensing, control, and ESC PWM. Already in hand. |
-| PWM expander | PCA9685 (`0x40`) | Generates the 50-60 Hz servo PWM the ESCs expect. |
-| Thrusters | 4x Blue Robotics T500 | Loaned from BeeX. 7-24 V, sensorless BLDC, ~16 kgf peak each. |
+| Companion computer | Raspberry Pi 4 4GB | Headless. Runs ArUco vision processing and the PID control loop at 20 Hz. Sends MANUAL_CONTROL over MAVLink serial to the Pixhawk. |
+| Flight controller | Pixhawk 1 (FMUv2) | Runs ArduSub. Receives MANUAL_CONTROL at 57600 baud. Vectored frame mixer allocates surge/sway/yaw to the 4 ESC outputs. |
+| Thrusters | 4x Blue Robotics T500 | Loaned from BeeX. 7-24 V, sensorless BLDC, ~16 kgf peak each. Horizontal only, no vertical thrust. |
 | ESCs | 4x Skystars Jupiter 50A (AM32) | FPV-grade, reversible ("3D") mode, low-voltage cutoff disabled. *Verify shipped firmware before buying.* |
 | Battery | BeeX 24 V pack (loaned) | Matches the T500 ceiling; confirm full-charge stays at or below 24 V (ESC voltage gate ~25.2 V). |
 | Pi power | 5 V buck off the 24 V bus | Cytron 5 A buck. |
@@ -77,20 +77,13 @@ controller board.
 
 Bring-up check: `i2cdetect -y 1` must show `0x40`, `0x68`/`0x69`, and `0x76`.
 
-### The control loop *(planned)*
-- **Rate:** ~50 Hz, with a watchdog.
-- **Estimation:** fuse the IMU and magnetometer for attitude/heading; depth from
-  MS5837; relative pose to the target from ArUco.
-- **Control:** one PID per controlled axis, surge / sway / heave / yaw.
-- **Allocation:** a thrust-allocation matrix maps desired body forces onto the
-  four thruster commands, then out to the PCA9685. Thrust commands are mapped
-  from `-1..+1` onto `1000..2000 us` with `1500 us` as stop, matching the ESC
-  3D mode.
-- **Failsafe:** fail-to-stop. If vision is lost, the IMU returns NaN, or the
-  loop stalls, every thruster is commanded neutral.
-- **Magnetometer caveat:** the IMU sits on a mild-steel frame, so the heading
-  solution needs hard/soft-iron calibration after final assembly and a yaw
-  correction for the steel bias.
+### The control loop
+- **Rate:** 20 Hz control loop on the Pi. ArduSub's inner loop runs at 400 Hz on the Pixhawk.
+- **Estimation:** attitude from the Pixhawk's EKF-fused IMU (via MAVLink ATTITUDE); depth from the Bar02 (via MAVLink); relative pose to the target from ArUco on the Pi's CSI camera.
+- **Control:** one PID per controlled axis: surge, sway, yaw. No heave control (no vertical thrusters; depth is set by ballast and crane).
+- **Allocation:** the Pi sends body-frame stick commands (MANUAL_CONTROL) to ArduSub in MANUAL mode. ArduSub's vectored frame mixer maps surge/sway/yaw onto the four horizontal thrusters. Zero ArduSub PID loops are active in MANUAL mode, so the Pi PID is the only closed loop.
+- **Failsafe:** leak sensor triggers immediate disarm (sticks zeroed first, then disarm command). Vision loss zeroes sticks via the DecisionEngine state machine. ArduSub's FS_GCS_ENABLE failsafe is the backstop if the Pi crashes entirely.
+- **Magnetometer caveat:** the IMU sits on a mild-steel frame, so the heading solution needs hard/soft-iron calibration after final assembly and a yaw correction for the steel bias.
 
 ---
 

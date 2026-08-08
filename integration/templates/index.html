@@ -43,6 +43,10 @@
             <label for="power-slider">Power: <span id="power-value">100</span>%</label>
             <input type="range" id="power-slider" min="0" max="100" step="5" value="100">
           </div>
+          <div class="power-row">
+            <label for="led-slider">LED brightness: <span id="led-value">50</span>%</label>
+            <input type="range" id="led-slider" min="0" max="100" step="5" value="50">
+          </div>
           <div class="control-row">
             <div class="dpad" id="dpad">
               <button class="fwd"  data-key="w">&uarr;</button>
@@ -89,10 +93,24 @@
 
         <div class="control-footer">
           <span class="watchdog" id="watchdog">last command: --</span>
+          <div class="flight-mode-row">
+            <label for="flight-mode-select">Flight mode:</label>
+            <select id="flight-mode-select">
+              <option value="MANUAL">MANUAL (no stabilization)</option>
+              <option value="STABILIZE">STABILIZE (auto-level roll/pitch)</option>
+            </select>
+            <button id="flight-mode-set-btn">Set</button>
+          </div>
           <div class="arm-buttons">
             <button id="arm-btn">ARM</button>
             <button id="disarm-btn">DISARM</button>
           </div>
+        </div>
+        <div class="control-hint">
+          Flight mode is ArduSub's own setting -- separate from the
+          Manual/Auto toggle above. Roll/pitch auto-leveling only runs
+          in <code>STABILIZE</code>; in <code>MANUAL</code> mode
+          thruster commands pass straight through with zero correction.
         </div>
       </div>
     </div>
@@ -109,7 +127,10 @@
           <div class="stat-tile"><div class="label">Int baro (MS5611)</div><div class="value na" data-field="pressure_int">--</div></div>
           <div class="stat-tile"><div class="label">Mode</div><div class="value na" data-field="mode">--</div></div>
           <div class="stat-tile"><div class="label">Servo PWM 1-4</div><div class="value na" data-field="servo">--</div></div>
+          <div class="stat-tile"><div class="label">Motor output bank</div><div class="value na" data-field="output_bank">--</div></div>
           <div class="stat-tile"><div class="label">Accel X/Y/Z (m/s&sup2;)</div><div class="value na" data-field="accel">--</div></div>
+          <div class="stat-tile"><div class="label">Battery</div><div class="value na" data-field="battery">--</div></div>
+          <div class="stat-tile" style="grid-column: span 2;"><div class="label">ArduSub status</div><div class="value na" data-field="statustext">--</div></div>
         </div>
         <div>
           <div class="label" style="font-size:11px; color:var(--text-muted); text-transform:uppercase; margin-top:14px;">Tilt from level</div>
@@ -118,13 +139,21 @@
       </div>
 
       <div class="card">
-        <h2>External Sensors (RPi)</h2>
+        <h2>Pixhawk parameters</h2>
+        <div class="param-list" id="param-list">
+          <div class="param-empty">Verifying on next connect...</div>
+        </div>
+        <div class="control-hint">
+          Safety-critical ArduSub parameters verified on connect. Green = matches
+          expected value. Red = misconfigured or unreadable -- fix in QGroundControl
+          before wet testing.
+        </div>
+      </div>
+
+      <div class="card leak-card">
+        <h2>Leak sensor</h2>
         <div class="stat-grid" id="external-grid">
-          <div class="stat-tile"><div class="label">Roll (accel)</div><div class="value na" data-field="ext-roll">--</div></div>
-          <div class="stat-tile"><div class="label">Pitch (accel)</div><div class="value na" data-field="ext-pitch">--</div></div>
-          <div class="stat-tile"><div class="label">Yaw (mag)</div><div class="value na" data-field="ext-yaw">--</div></div>
-          <div class="stat-tile"><div class="label">Leak sensor</div><div class="value na" data-field="ext-leak">--</div></div>
-          <div class="stat-tile" style="grid-column: span 2;"><div class="label">Accel X/Y/Z (m/s&sup2;)</div><div class="value na" data-field="ext-accel">--</div></div>
+          <div class="stat-tile"><div class="label">Status</div><div class="value na" data-field="ext-leak">--</div></div>
         </div>
       </div>
 

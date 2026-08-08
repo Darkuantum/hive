@@ -130,7 +130,7 @@ class ArucoDetector:
     get_pose() repeatedly (e.g. once per main-loop iteration or in a
     background thread), then stop() on shutdown."""
 
-    def __init__(self, dict_name="DICT_4X4_50", width=1280, height=720,
+    def __init__(self, dict_name="DICT_4X4_50", width=640, height=480,
                  hfov_deg=100.0, vfov_deg=72.0, marker_size=0.10,
                  z_correction=1.6, exposure_us=20000, gain=4.0,
                  calib_path=None, enhance_low_light=True):
@@ -199,6 +199,11 @@ class ArucoDetector:
         self.picam2.set_controls({
             "ExposureTime": self.exposure_us,
             "AnalogueGain": self.gain,
+            # Disable the IPA software denoise stage (SDN) that runs on
+            # the CPU on Pi 4 -- it adds per-frame latency. Both Pi 4 and
+            # Pi 5 have hardware ISP denoise; this only disables the extra
+            # software post-processing stage.
+            "NoiseReductionMode": 0,
         })
 
     def stop(self):
@@ -225,8 +230,14 @@ class ArucoDetector:
         a live preview window can keep showing video while you position
         the marker. get_pose() is a thin wrapper around this for callers
         that only care about the pose."""
-        frame = self.picam2.capture_array()  # RGB888
-        detect_input = enhance_low_light(frame) if self.enhance_low_light_enabled else frame
+        frame = self.picam2.capture_array()  # RGB888 (kept for display overlay)
+        if self.enhance_low_light_enabled:
+            detect_input = enhance_low_light(frame)
+        else:
+            # Pass grayscale directly -- detectMarkers converts internally
+            # anyway, but a single-channel image skips ~2ms of color
+            # conversion per frame in the detection pipeline.
+            detect_input = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
         if self._new_aruco_api:
             corners, ids, _ = self._detector_obj.detectMarkers(detect_input)
         else:
@@ -391,6 +402,9 @@ def _run_calibration_check(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="ArUco detection + pose on IMX708 CSI camera")
     parser.add_argument("--dict", default="DICT_4X4_50", choices=ARUCO_DICTS.keys())
+    # Standalone preview keeps 1280x720 for display quality on a monitor.
+    # The class default (640x480) is optimized for the headless integration
+    # path where detection speed matters more than preview resolution.
     parser.add_argument("--width", type=int, default=1280)
     parser.add_argument("--height", type=int, default=720)
     parser.add_argument("--calib", default=None,

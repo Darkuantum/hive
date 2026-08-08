@@ -1,3 +1,7 @@
 __pycache__/
 *.pyc
 .venv/
+.slim/deepwork/
+
+camera/recordings/
+camera/results/

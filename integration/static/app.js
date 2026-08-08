@@ -119,6 +119,38 @@
     userIsAdjustingPower = false;
   });
 
+  // ---------------- LED brightness slider ----------------
+  const ledSlider = document.getElementById('led-slider');
+  const ledValue = document.getElementById('led-value');
+  ledSlider.addEventListener('input', () => {
+    ledValue.textContent = ledSlider.value;
+  });
+  ledSlider.addEventListener('change', () => {
+    fetch('/api/led', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ brightness: parseFloat(ledSlider.value) }),
+    });
+  });
+
+  // ---------------- ArduSub flight mode ----------------
+  // This is ArduSub's OWN flight mode (MANUAL/STABILIZE/etc), separate
+  // from this app's manual/auto control_mode toggle above.
+  const flightModeSelect = document.getElementById('flight-mode-select');
+  const flightModeSetBtn = document.getElementById('flight-mode-set-btn');
+  let userIsPickingFlightMode = false;
+
+  flightModeSelect.addEventListener('focus', () => { userIsPickingFlightMode = true; });
+  flightModeSelect.addEventListener('blur', () => { userIsPickingFlightMode = false; });
+
+  flightModeSetBtn.addEventListener('click', () => {
+    fetch('/api/mode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: flightModeSelect.value }),
+    }).catch(() => {});
+  });
+
   // ---------------- manual / auto mode toggle ----------------
   const manualPanel = document.getElementById('manual-panel');
   const autoPanel = document.getElementById('auto-panel');
@@ -184,10 +216,37 @@
   const yawDebugReadout = document.getElementById('yaw-debug-readout');
   const yawSaturatedHint = document.getElementById('yaw-saturated-hint');
 
+  function renderParams(params) {
+    const container = document.getElementById('param-list');
+    if (!params || params.length === 0) {
+      container.innerHTML = '<div class="param-empty">Verifying on next connect...</div>';
+      return;
+    }
+    let html = '';
+    for (const p of params) {
+      const dotClass = p.ok ? 'good' : 'critical';
+      const actualStr = p.actual != null ? p.actual : '--';
+      const expectedStr = p.expected != null ? p.expected : '--';
+      const errorStr = p.error ? ` <span style="color:var(--color-critical,#d44);font-size:11px;">(${p.error})</span>` : '';
+      html += `<div class="param-row">` +
+        `<span class="dot ${dotClass}" style="display:inline-block;width:8px;height:8px;border-radius:50;margin-right:6px;flex-shrink:0;"></span>` +
+        `<span style="font-weight:600;">${p.name}</span>` +
+        `<span style="color:var(--text-muted,#999);margin-left:6px;font-size:12px;">${p.description}</span>` +
+        `<div style="font-size:12px;margin-top:2px;color:var(--text-muted,#999);padding-left:14px;">expected ${expectedStr}, got ${actualStr}${errorStr}</div>` +
+        `</div>`;
+    }
+    container.innerHTML = html;
+  }
+
   async function pollState() {
     try {
       const res = await fetch('/api/state');
       const data = await res.json();
+
+      // Fetch parameter verification status in parallel
+      fetch('/api/params').then(r => r.json()).then(params => {
+        renderParams(params);
+      }).catch(() => {});
       const m = data.mavlink || {};
       const cam = data.camera || {};
       const pose = data.pose;
@@ -235,6 +294,7 @@
       const servos = ['servo1', 'servo2', 'servo3', 'servo4'].map((k) => m[k]);
       const anyServo = servos.some((v) => v != null);
       setField(telemetryGrid, 'servo', anyServo ? servos.map((v) => v ?? '-').join(' / ') : '--', !anyServo);
+      setField(telemetryGrid, 'output_bank', m.output_bank || '--', !m.output_bank || m.output_bank === 'UNKNOWN');
 
       const accelKnown = m.accel_x != null && m.accel_y != null && m.accel_z != null;
       setField(
@@ -242,6 +302,32 @@
         accelKnown ? `${m.accel_x.toFixed(2)} / ${m.accel_y.toFixed(2)} / ${m.accel_z.toFixed(2)}` : '--',
         !accelKnown
       );
+
+      // Battery
+      const bv = m.battery_voltage;
+      const bc = m.battery_current;
+      const br = m.battery_remaining;
+      let batteryText = '--';
+      if (bv != null && bv >= 0) {
+        const parts = [bv.toFixed(1) + 'V'];
+        if (bc != null && bc >= 0) parts.push(bc.toFixed(1) + 'A');
+        if (br != null && br >= 0) parts.push(br + '%');
+        batteryText = parts.join(' / ');
+      }
+      setField(telemetryGrid, 'battery', batteryText, bv == null || bv < 0);
+
+      // STATUSTEXT
+      setField(telemetryGrid, 'statustext', m.statustext || '--', !m.statustext);
+      if (m.statustext && m.statustext_severity != null) {
+        const stEl = telemetryGrid.querySelector('[data-field="statustext"]');
+        if (stEl) {
+          if (m.statustext_severity <= 3) {
+            stEl.style.color = m.statustext_severity <= 2 ? 'var(--color-critical,#d44)' : '#e0a030';
+          } else {
+            stEl.style.color = '';
+          }
+        }
+      }
 
       const tilt = m.tilt_deg;
       if (tilt != null) {
@@ -291,19 +377,10 @@
         watchdogEl.classList.remove('tripped');
       }
 
-      setField(externalGrid, 'ext-roll', fmt(ext.roll_deg, 1, '°'), ext.roll_deg == null);
-      setField(externalGrid, 'ext-pitch', fmt(ext.pitch_deg, 1, '°'), ext.pitch_deg == null);
-      setField(externalGrid, 'ext-yaw', fmt(ext.yaw_deg, 1, '°'), ext.yaw_deg == null);
       setField(
         externalGrid, 'ext-leak',
         ext.connected ? (ext.leak ? 'LEAK!' : 'dry') : '--',
         !ext.connected
-      );
-      const extAccelKnown = ext.accel_x != null && ext.accel_y != null && ext.accel_z != null;
-      setField(
-        externalGrid, 'ext-accel',
-        extAccelKnown ? `${ext.accel_x.toFixed(2)} / ${ext.accel_y.toFixed(2)} / ${ext.accel_z.toFixed(2)}` : '--',
-        !extAccelKnown
       );
     } catch (err) {
       // transient network hiccup -- next poll will retry
