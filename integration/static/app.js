@@ -377,19 +377,10 @@
         watchdogEl.classList.remove('tripped');
       }
 
-      setField(externalGrid, 'ext-roll', fmt(ext.roll_deg, 1, '°'), ext.roll_deg == null);
-      setField(externalGrid, 'ext-pitch', fmt(ext.pitch_deg, 1, '°'), ext.pitch_deg == null);
-      setField(externalGrid, 'ext-yaw', fmt(ext.yaw_deg, 1, '°'), ext.yaw_deg == null);
       setField(
         externalGrid, 'ext-leak',
         ext.connected ? (ext.leak ? 'LEAK!' : 'dry') : '--',
         !ext.connected
-      );
-      const extAccelKnown = ext.accel_x != null && ext.accel_y != null && ext.accel_z != null;
-      setField(
-        externalGrid, 'ext-accel',
-        extAccelKnown ? `${ext.accel_x.toFixed(2)} / ${ext.accel_y.toFixed(2)} / ${ext.accel_z.toFixed(2)}` : '--',
-        !extAccelKnown
       );
     } catch (err) {
       // transient network hiccup -- next poll will retry

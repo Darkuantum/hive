@@ -552,9 +552,10 @@ class HardwareManager:
             return self._latest_jpeg
 
     # ------------------------------------------------------------------
-    # external sensors: ICM20948 + SOS leak sensor, independent of the
-    # Pixhawk entirely -- same reconnect-on-failure pattern as the
-    # other two threads.
+    # external sensors: SOS leak sensor, independent of the Pixhawk
+    # entirely -- same reconnect-on-failure pattern as the other two
+    # threads. (Used to also read an external ICM20948 IMU as a
+    # cross-check; removed by design decision -- Pixhawk IMU only now.)
     # ------------------------------------------------------------------
     def _external_thread(self):
         RECONNECT_DELAY_S = 3.0

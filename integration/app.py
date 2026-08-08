@@ -154,7 +154,7 @@ def main():
                          help="Skip camera startup (e.g. bench-testing off-Pi; "
                               "auto mode will have nothing to react to without it)")
     parser.add_argument('--no-external', action='store_true',
-                         help="Skip the external ICM20948/leak sensor thread "
+                         help="Skip the external leak sensor thread "
                               "(e.g. testing off-Pi, or before that hardware "
                               "is wired up)")
     parser.add_argument('--num-leds', type=int, default=8,
