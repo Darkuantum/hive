@@ -94,9 +94,8 @@ Bring-up check: `i2cdetect -y 1` must show `0x40`, `0x68`/`0x69`, and `0x76`.
 | `camera/` | active | ArUco detection and pose estimation on the CSI camera (IMX708). Multiple script variants for different marker sizes and lighting; `camtest.py` is the current tuning harness for dark/underwater work. `results/` holds trial data. |
 | `integration/` | active | Canonical integrated stack: MAVLink interface, ArUco vision node, per-axis PID (`pose_controller.py`), recovery state machine (`decision_engine.py`), external sensors, and a Flask web UI with manual and auto (camera-following) modes. Runs headless on the Pi. |
 | `webui/` | active | Lightweight LAN web UI for headless monitoring during runs. Manual control only; imports modules from `integration/`. |
-| `positioning/` | bench | Sensor bring-up: ICM20948 IMU + Blue Robotics SOS leak detector test harness. |
-| `led/` | driver | APA102/DotStar status indicator strip over SPI. |
-| `archive/` | reference | Superseded code kept for reference: the standalone frame station-keep MAVLink test, the prior `integration-old/` stack. |
+| `positioning/` | bench | Blue Robotics SOS leak-detector bench test (`leak_test.py`). The external IMU this used to also cover was removed by design decision — the project relies solely on the Pixhawk's IMU now. |
+| `led/` | driver | APA102/DotStar status indicator strip over SPI; `led_test.py` is a standalone bench chase-test, `integration/led_controller.py` is the driver the live app uses. |
 
 ---
 
