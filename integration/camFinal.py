@@ -32,6 +32,14 @@ import cv2
 import numpy as np
 from picamera2 import Picamera2
 
+# The camera's physical mount produces an image flipped relative to what
+# the rest of the pipeline (and the mounting calibration in
+# pose_controller.py) assumes -- flip it back right at capture so
+# detection, pose estimation, and the returned preview/overlay frame are
+# all consistent. flipCode=0 is a top/bottom (vertical) flip; if the real
+# mismatch turns out to be left/right instead, use flipCode=1.
+MIRROR_FRAME_VERTICAL = True
+
 ARUCO_DICTS = {
     "DICT_4X4_50": cv2.aruco.DICT_4X4_50,
     "DICT_4X4_100": cv2.aruco.DICT_4X4_100,
@@ -231,6 +239,8 @@ class ArucoDetector:
         the marker. get_pose() is a thin wrapper around this for callers
         that only care about the pose."""
         frame = self.picam2.capture_array()  # RGB888 (kept for display overlay)
+        if MIRROR_FRAME_VERTICAL:
+            frame = cv2.flip(frame, 0)
         if self.enhance_low_light_enabled:
             detect_input = enhance_low_light(frame)
         else:
