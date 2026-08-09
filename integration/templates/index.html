@@ -169,6 +169,118 @@
     </div>
   </div>
 
+  <!-- Calibration Section -->
+  <div class="cal-section">
+    <div class="cal-section-header">
+      <h2>Calibration</h2>
+    </div>
+
+    <div class="cal-grid">
+      <!-- Panel 1: Step Runner -->
+      <div class="cal-panel">
+        <h3>Step runner</h3>
+
+        <div class="cal-field">
+          <label for="cal-axis">Axis</label>
+          <select id="cal-axis">
+            <option value="surge">Surge (forward/back)</option>
+            <option value="sway">Sway (left/right)</option>
+            <option value="yaw">Yaw (rotation)</option>
+          </select>
+        </div>
+
+        <div class="cal-field-row">
+          <div class="cal-field">
+            <label for="cal-amplitude">Amplitude</label>
+            <input type="number" id="cal-amplitude" min="-0.5" max="0.5" step="0.05" value="0.3">
+          </div>
+          <div class="cal-field">
+            <label for="cal-duration">Step duration (s)</label>
+            <input type="number" id="cal-duration" min="1" max="30" step="1" value="5">
+          </div>
+        </div>
+
+        <div class="cal-field">
+          <label for="cal-run-name">Run name (optional)</label>
+          <input type="text" id="cal-run-name" placeholder="auto-generated if blank">
+        </div>
+
+        <div class="cal-btn-row">
+          <button class="cal-btn cal-btn-primary" id="cal-run-btn">Run Surge Step</button>
+          <button class="cal-btn cal-btn-danger" id="cal-abort-btn" disabled>Abort</button>
+        </div>
+
+        <div class="cal-status" id="cal-step-status" data-status="idle">
+          <span class="cal-status-dot"></span>
+          <span id="cal-step-status-text">Idle</span>
+        </div>
+
+        <div class="cal-completion" id="cal-completion" style="display:none;"></div>
+        <div class="cal-error" id="cal-step-error"></div>
+      </div>
+
+      <!-- Panel 2: Identify + Apply -->
+      <div class="cal-panel">
+        <h3>Identify + apply</h3>
+
+        <div class="cal-field">
+          <label for="cal-csv-path">CSV path</label>
+          <input type="text" id="cal-csv-path" placeholder="/path/to/run.csv — click a run in Panel 3">
+        </div>
+
+        <div class="cal-field" style="margin-bottom:0;">
+          <label for="cal-id-axis">Axis (for model)</label>
+          <select id="cal-id-axis">
+            <option value="surge">Surge</option>
+            <option value="sway">Sway</option>
+            <option value="yaw">Yaw</option>
+          </select>
+        </div>
+
+        <div class="cal-btn-row">
+          <button class="cal-btn cal-btn-primary" id="cal-identify-btn">Identify model</button>
+          <button class="cal-btn cal-btn-secondary" id="cal-apply-btn" disabled>Apply gains</button>
+        </div>
+
+        <!-- Model results -->
+        <div id="cal-model-results" style="display:none; margin-top:12px;">
+          <div class="cal-model-grid">
+            <div class="cal-model-tile"><div class="label">K (gain)</div><div class="value" id="cal-m-K">--</div></div>
+            <div class="cal-model-tile"><div class="label">&tau; (time const)</div><div class="value" id="cal-m-tau">--</div></div>
+            <div class="cal-model-tile"><div class="label">L (delay)</div><div class="value" id="cal-m-L">--</div></div>
+            <div class="cal-model-tile"><div class="label">R&sup2;</div><div class="value" id="cal-m-R2">--</div></div>
+          </div>
+
+          <div class="cal-tuning-block">
+            <div class="label">Suggested gains</div>
+            <div class="values">
+              <span>Kp: <span id="cal-g-Kp">--</span></span>
+              <span>Ki: <span id="cal-g-Ki">--</span></span>
+              <span>Kd: <span id="cal-g-Kd">--</span></span>
+            </div>
+          </div>
+
+          <div class="cal-tuning-block" style="margin-top:8px;">
+            <div class="label">Closed-loop &tau;</div>
+            <div class="values"><span id="cal-g-tau-cl">--</span></div>
+          </div>
+
+          <div id="cal-id-warn" class="cal-warn" style="display:none;"></div>
+        </div>
+
+        <div class="cal-error" id="cal-id-error"></div>
+      </div>
+
+      <!-- Panel 3: Past Runs -->
+      <div class="cal-panel">
+        <h3>Past runs</h3>
+        <div id="cal-runs-body">
+          <div class="cal-runs-empty">Loading...</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script src="{{ url_for('static', filename='app.js') }}"></script>
 </body>
 </html>

@@ -390,4 +390,346 @@
   applyModeToUI(currentMode);
   setInterval(pollState, STATE_POLL_MS);
   pollState();
+
+  // ================================================================
+  // Calibration module
+  // ================================================================
+  (() => {
+    'use strict';
+
+    const STEP_POLL_MS = 500; // 2 Hz
+
+    // --- DOM refs ---
+    const axisSelect     = document.getElementById('cal-axis');
+    const amplitudeInput = document.getElementById('cal-amplitude');
+    const durationInput  = document.getElementById('cal-duration');
+    const runNameInput   = document.getElementById('cal-run-name');
+    const runBtn         = document.getElementById('cal-run-btn');
+    const abortBtn       = document.getElementById('cal-abort-btn');
+    const stepStatusEl   = document.getElementById('cal-step-status');
+    const stepStatusText = document.getElementById('cal-step-status-text');
+    const completionEl   = document.getElementById('cal-completion');
+    const stepErrorEl    = document.getElementById('cal-step-error');
+
+    const csvPathInput   = document.getElementById('cal-csv-path');
+    const idAxisSelect   = document.getElementById('cal-id-axis');
+    const identifyBtn    = document.getElementById('cal-identify-btn');
+    const applyBtn       = document.getElementById('cal-apply-btn');
+    const modelResultsEl = document.getElementById('cal-model-results');
+    const mK  = document.getElementById('cal-m-K');
+    const mTau = document.getElementById('cal-m-tau');
+    const mL   = document.getElementById('cal-m-L');
+    const mR2  = document.getElementById('cal-m-R2');
+    const gKp  = document.getElementById('cal-g-Kp');
+    const gKi  = document.getElementById('cal-g-Ki');
+    const gKd  = document.getElementById('cal-g-Kd');
+    const gTauCl = document.getElementById('cal-g-tau-cl');
+    const idWarnEl  = document.getElementById('cal-id-warn');
+    const idErrorEl = document.getElementById('cal-id-error');
+
+    const runsBody = document.getElementById('cal-runs-body');
+
+    // Keep the last identification gains for the apply button
+    let lastGains = null;
+
+    // --- Update run button label based on axis ---
+    function updateRunLabel() {
+      const axis = axisSelect.value;
+      runBtn.textContent = 'Run ' + axis.charAt(0).toUpperCase() + axis.slice(1) + ' Step';
+    }
+    axisSelect.addEventListener('change', updateRunLabel);
+
+    // --- Step runner: run ---
+    runBtn.addEventListener('click', async () => {
+      const amplitude = parseFloat(amplitudeInput.value);
+      const stepDuration = parseFloat(durationInput.value);
+      if (isNaN(amplitude) || amplitude < -0.5 || amplitude > 0.5) {
+        stepErrorEl.textContent = 'Amplitude must be between -0.5 and 0.5.';
+        return;
+      }
+      if (isNaN(stepDuration) || stepDuration < 1) {
+        stepErrorEl.textContent = 'Step duration must be at least 1s.';
+        return;
+      }
+      stepErrorEl.textContent = '';
+      completionEl.style.display = 'none';
+      runBtn.disabled = true;
+      abortBtn.disabled = false;
+
+      try {
+        const res = await fetch('/api/calibrate/step/run', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            axis: axisSelect.value,
+            amplitude: amplitude,
+            step_duration: stepDuration,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          stepErrorEl.textContent = data.error || 'Failed to start step run.';
+          runBtn.disabled = false;
+          abortBtn.disabled = true;
+          return;
+        }
+        // Start polling status
+        startStepPoll();
+      } catch (err) {
+        stepErrorEl.textContent = 'Network error starting step run.';
+        runBtn.disabled = false;
+        abortBtn.disabled = true;
+      }
+    });
+
+    // --- Step runner: abort ---
+    abortBtn.addEventListener('click', async () => {
+      abortBtn.disabled = true;
+      try {
+        await fetch('/api/calibrate/step/abort', { method: 'POST' });
+      } catch (err) {
+        stepErrorEl.textContent = 'Network error sending abort.';
+      }
+    });
+
+    // --- Step status polling ---
+    let stepPollTimer = null;
+
+    function startStepPoll() {
+      if (stepPollTimer) return;
+      pollStepStatus();
+      stepPollTimer = setInterval(pollStepStatus, STEP_POLL_MS);
+    }
+
+    function stopStepPoll() {
+      if (stepPollTimer) {
+        clearInterval(stepPollTimer);
+        stepPollTimer = null;
+      }
+    }
+
+    async function pollStepStatus() {
+      try {
+        const res = await fetch('/api/calibrate/step/status');
+        const data = await res.json();
+        const status = data.status || 'idle';
+        stepStatusEl.setAttribute('data-status', status);
+
+        if (status === 'running') {
+          stepStatusText.textContent = 'Running\u2026';
+          runBtn.disabled = true;
+          abortBtn.disabled = false;
+        } else if (status === 'done') {
+          stepStatusText.textContent = 'Done';
+          runBtn.disabled = false;
+          abortBtn.disabled = true;
+          stopStepPoll();
+          // Show completion details
+          const s = data.summary || {};
+          let html = '';
+          if (s.run_id)        html += 'Run ID: <code>' + esc(s.run_id) + '</code><br>';
+          if (s.csv_path)      html += 'CSV: <code>' + esc(s.csv_path) + '</code><br>';
+          if (s.video_path)    html += 'Video: <code>' + esc(s.video_path) + '</code><br>';
+          if (s.duration != null) html += 'Duration: ' + s.duration.toFixed(1) + 's';
+          if (html) {
+            completionEl.innerHTML = html;
+            completionEl.style.display = 'block';
+            // Auto-populate CSV path in Panel 2
+            if (s.csv_path) {
+              csvPathInput.value = s.csv_path;
+            }
+          }
+          // Refresh runs table
+          loadRuns();
+        } else if (status === 'error') {
+          stepStatusText.textContent = 'Error';
+          runBtn.disabled = false;
+          abortBtn.disabled = true;
+          stopStepPoll();
+          stepErrorEl.textContent = data.error || 'Step run failed.';
+        } else {
+          stepStatusText.textContent = 'Idle';
+          runBtn.disabled = false;
+          abortBtn.disabled = true;
+          stopStepPoll();
+        }
+      } catch (err) {
+        // transient — next poll will retry
+      }
+    }
+
+    // --- Identify ---
+    identifyBtn.addEventListener('click', async () => {
+      const csvPath = csvPathInput.value.trim();
+      if (!csvPath) {
+        idErrorEl.textContent = 'Enter a CSV path (click a row in Past Runs to fill).';
+        return;
+      }
+      idErrorEl.textContent = '';
+      idWarnEl.style.display = 'none';
+      modelResultsEl.style.display = 'none';
+      lastGains = null;
+      applyBtn.disabled = true;
+      identifyBtn.disabled = true;
+
+      try {
+        const res = await fetch('/api/calibrate/identify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ csv_path: csvPath, axis: idAxisSelect.value }),
+        });
+        const data = await res.json();
+        identifyBtn.disabled = false;
+
+        if (!res.ok) {
+          idErrorEl.textContent = data.error || 'Identification failed.';
+          return;
+        }
+
+        // Render model
+        const model = data.model || {};
+        mK.textContent   = model.K != null ? model.K.toPrecision(4) : '--';
+        mTau.textContent = model.tau != null ? model.tau.toPrecision(4) : '--';
+        mL.textContent   = model.L != null ? model.L.toPrecision(4) : '--';
+
+        // Color-code R²
+        const r2 = model.R_squared;
+        if (r2 != null) {
+          mR2.textContent = r2.toFixed(4);
+          mR2.className = 'value';
+          if (r2 >= 0.9) {
+            mR2.classList.add('cal-r2-good');
+          } else if (r2 >= 0.7) {
+            mR2.classList.add('cal-r2-ok');
+          } else {
+            mR2.classList.add('cal-r2-bad');
+          }
+        } else {
+          mR2.textContent = '--';
+          mR2.className = 'value na';
+        }
+
+        // Render tuning
+        const tuning = data.tuning || {};
+        gKp.textContent  = tuning.Kp != null ? tuning.Kp.toPrecision(4) : '--';
+        gKi.textContent  = tuning.Ki != null ? tuning.Ki.toPrecision(4) : '--';
+        gKd.textContent  = tuning.Kd != null ? tuning.Kd.toPrecision(4) : '--';
+        gTauCl.textContent = tuning.tau_cl != null ? tuning.tau_cl.toPrecision(4) : '--';
+
+        modelResultsEl.style.display = 'block';
+
+        // Store gains for apply
+        lastGains = data.gains || tuning;
+        applyBtn.disabled = false;
+
+        // Warnings
+        if (data.warnings && data.warnings.length) {
+          idWarnEl.textContent = data.warnings.join(' ');
+          idWarnEl.style.display = 'block';
+        }
+      } catch (err) {
+        idErrorEl.textContent = 'Network error during identification.';
+        identifyBtn.disabled = false;
+      }
+    });
+
+    // --- Apply gains ---
+    applyBtn.addEventListener('click', async () => {
+      applyBtn.disabled = true;
+      idErrorEl.textContent = '';
+      try {
+        const res = await fetch('/api/calibrate/gains/save', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(lastGains || {}),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          idErrorEl.textContent = data.error || 'Failed to save gains.';
+          applyBtn.disabled = false;
+          return;
+        }
+        // Brief confirmation
+        applyBtn.textContent = 'Saved';
+        setTimeout(() => {
+          applyBtn.textContent = 'Apply gains';
+          applyBtn.disabled = false;
+        }, 2000);
+      } catch (err) {
+        idErrorEl.textContent = 'Network error saving gains.';
+        applyBtn.disabled = false;
+      }
+    });
+
+    // --- Past runs table ---
+    async function loadRuns() {
+      try {
+        const res = await fetch('/api/calibrate/runs');
+        const data = await res.json();
+        const runs = data.runs || [];
+
+        if (runs.length === 0) {
+          runsBody.innerHTML = '<div class="cal-runs-empty">No runs recorded yet.</div>';
+          return;
+        }
+
+        let html = '<table class="cal-runs-table"><thead><tr>' +
+          '<th>Run</th><th>CSV</th><th>Video</th><th>Size</th>' +
+          '</tr></thead><tbody>';
+
+        for (const r of runs) {
+          const csvIcon  = r.has_csv  ? '<span class="cal-icon cal-icon-present"></span>' : '<span class="cal-icon cal-icon-missing"></span>';
+          const vidIcon  = r.has_video ? '<span class="cal-icon cal-icon-present"></span>' : '<span class="cal-icon cal-icon-missing"></span>';
+          let sizeStr = '';
+          const parts = [];
+          if (r.csv_size) parts.push(fmtSize(r.csv_size));
+          if (r.video_size) parts.push(fmtSize(r.video_size));
+          if (parts.length) sizeStr = parts.join(' / ');
+
+          html += '<tr data-run-id="' + esc(r.run_id) + '">' +
+            '<td>' + esc(r.run_id) + '</td>' +
+            '<td>' + csvIcon + (r.has_csv ? 'yes' : 'no') + '</td>' +
+            '<td>' + vidIcon + (r.has_video ? 'yes' : 'no') + '</td>' +
+            '<td>' + (sizeStr || '--') + '</td>' +
+            '</tr>';
+        }
+
+        html += '</tbody></table>';
+        runsBody.innerHTML = html;
+
+        // Click handler: populate CSV path
+        runsBody.querySelectorAll('tr[data-run-id]').forEach((tr) => {
+          tr.addEventListener('click', () => {
+            const runId = tr.getAttribute('data-run-id');
+            // Construct plausible CSV path from run_id
+            // The server will have the actual path, but we can guess based on convention
+            // The identify endpoint needs the full csv_path, so we store the run_id
+            // and let the user confirm or adjust
+            csvPathInput.value = runId + '.csv';
+            csvPathInput.focus();
+          });
+        });
+      } catch (err) {
+        runsBody.innerHTML = '<div class="cal-runs-empty">Failed to load runs.</div>';
+      }
+    }
+
+    function fmtSize(bytes) {
+      if (bytes < 1024) return bytes + ' B';
+      if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+      return (bytes / 1048576).toFixed(1) + ' MB';
+    }
+
+    function esc(s) {
+      const d = document.createElement('div');
+      d.textContent = s;
+      return d.innerHTML;
+    }
+
+    // --- Init ---
+    updateRunLabel();
+    loadRuns();
+    // Also poll step status on load in case a step was already running
+    pollStepStatus();
+  })();
 })();
