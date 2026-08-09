@@ -44,7 +44,7 @@ import time
 
 from pymavlink import mavutil
 from mavlink_interface import MavlinkInterface
-from pose_controller import PoseController, camera_to_body_yaw
+from pose_controller import PoseController, camera_to_body, camera_to_body_yaw
 from decision_engine import DecisionEngine
 
 CONTROL_TIMEOUT_S = 0.5    # manual mode only: zero sticks if nothing posted for this long
@@ -435,14 +435,25 @@ class HardwareManager:
                     row[f"{axis}_d"] = s['d']
                     row[f"{axis}_out"] = s['out']
             else:
-                # Manual mode or non-controlling auto: no PID state
+                # Manual mode (incl. open-loop step calibration) or non-controlling auto:
+                # no PID state, but position IS available from the live ArUco pose.
                 for axis in ('surge', 'sway', 'yaw'):
                     row[f"{axis}_setpoint"] = ""
-                    row[f"{axis}_measured"] = ""
                     row[f"{axis}_p"] = ""
                     row[f"{axis}_i"] = ""
                     row[f"{axis}_d"] = ""
                     row[f"{axis}_out"] = ""
+
+                if pose is not None:
+                    x_b, y_b, _z_b = camera_to_body(pose['x'], pose['y'], pose['z'])
+                    yaw_b = camera_to_body_yaw(pose['yaw'])
+                    row["surge_measured"] = x_b
+                    row["sway_measured"] = y_b
+                    row["yaw_measured"] = yaw_b
+                else:
+                    row["surge_measured"] = ""
+                    row["sway_measured"] = ""
+                    row["yaw_measured"] = ""
 
             row["motor_x"] = motor_x
             row["motor_y"] = motor_y
@@ -754,6 +765,27 @@ class HardwareManager:
         )
         gains.to_file(save_path)
         return gains.to_dict()
+
+    def run_open_loop_step(self, axis: str, amplitude: float,
+                           pre_duration: float = 2.0, step_duration: float = 5.0,
+                           post_duration: float = 3.0, name: str = None) -> dict:
+        """Execute an open-loop step response for system identification.
+
+        Blocking call. Switches to manual mode, applies the step, returns to original mode.
+        Returns the stop_logging_run() summary dict (run_id, duration, csv_path, video_path, etc.).
+
+        Raises StepAborted if marker lost or mode changed during execution.
+        """
+        from calibration.trajectories import StepInput
+        from calibration.step_runner import StepRunner
+
+        step = StepInput(
+            axis=axis, amplitude=amplitude,
+            pre_duration=pre_duration, step_duration=step_duration,
+            post_duration=post_duration,
+        )
+        runner = StepRunner(self)
+        return runner.run(step, run_name=name)
 
     # ------------------------------------------------------------------
     # camera: continuous capture + pose, latest-frame-wins
