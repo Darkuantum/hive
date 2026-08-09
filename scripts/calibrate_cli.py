@@ -57,7 +57,7 @@ def _http_get(url):
 # ---------------------------------------------------------------------------
 
 def cmd_step(args):
-    server = args.server or os.environ.get('HIVE_SERVER', 'localhost:5000')
+    server = args.server or os.environ.get('HIVE_SERVER', 'localhost:8000')
     base = f'http://{server}'
 
     # Build estimated duration for timeout
@@ -215,6 +215,11 @@ def cmd_apply(args):
 
     output = args.output or 'gains.json'
 
+    if os.path.exists(output) and not args.force:
+        print(f'Error: {output} already exists. Use --force to overwrite.',
+              file=sys.stderr)
+        return 1
+
     try:
         model = identify_from_csv(csv_path, axis=args.axis)
     except Exception as exc:
@@ -328,7 +333,7 @@ def main():
     p_step.add_argument('--name', default=None,
                         help='Run name suffix for logging')
     p_step.add_argument('--server', default=None,
-                        help='Server host:port (default: localhost:5000 or HIVE_SERVER env)')
+                         help='Server host:port (default: localhost:8000 or HIVE_SERVER env)')
 
     # identify
     p_id = subparsers.add_parser('identify', help='Fit model from telemetry CSV (offline)')
@@ -347,6 +352,8 @@ def main():
                          help='Output gains file (default: gains.json)')
     p_apply.add_argument('--tau-cl', type=float, default=None,
                          help='Desired closed-loop time constant (default: auto)')
+    p_apply.add_argument('--force', '-f', action='store_true',
+                         help='overwrite existing gains file without prompting')
 
     # list
     p_list = subparsers.add_parser('list', help='List past calibration runs (offline)')

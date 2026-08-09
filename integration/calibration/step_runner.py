@@ -78,6 +78,7 @@ class StepRunner:
             except Exception:
                 pass
             summary = self.hm.stop_logging_run()
+            self.last_summary = summary
 
         return summary
 
@@ -91,6 +92,10 @@ class StepRunner:
         marker_lost_since = None
 
         for _ in range(ticks):
+            # Check abort: shutdown requested?
+            if self.hm.is_shutting_down():
+                raise StepAborted("shutdown requested")
+
             # Check abort: mode changed?
             if self.hm.get_control_mode() != 'manual':
                 raise StepAborted("control mode changed from 'manual' during step")

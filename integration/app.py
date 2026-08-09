@@ -218,7 +218,7 @@ def api_calibrate_step_run():
             name=data.get('name'),
         )
         return jsonify(result)
-    except ValueError as e:
+    except (ValueError, TypeError) as e:
         return jsonify({"error": str(e)}), 400
     except Exception as e:
         return jsonify({"error": str(e)}), 500

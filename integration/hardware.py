@@ -157,6 +157,8 @@ class HardwareManager:
         self._step_thread = None
         self._step_result = None
         self._step_error = None
+        self._step_partial = None
+        self._last_step_summary = None
         self._step_lock = threading.Lock()
 
     # ------------------------------------------------------------------
@@ -772,6 +774,11 @@ class HardwareManager:
         gains.to_file(save_path)
         return gains.to_dict()
 
+    @property
+    def is_shutting_down(self) -> bool:
+        """True if stop() has been called (shutdown in progress)."""
+        return self._stop.is_set()
+
     def run_open_loop_step(self, axis: str, amplitude: float,
                            pre_duration: float = 2.0, step_duration: float = 5.0,
                            post_duration: float = 3.0, name: str = None) -> dict:
@@ -783,7 +790,7 @@ class HardwareManager:
         Raises StepAborted if marker lost or mode changed during execution.
         """
         from calibration.trajectories import StepInput
-        from calibration.step_runner import StepRunner
+        from calibration.step_runner import StepRunner, StepAborted
 
         step = StepInput(
             axis=axis, amplitude=amplitude,
@@ -791,7 +798,11 @@ class HardwareManager:
             post_duration=post_duration,
         )
         runner = StepRunner(self)
-        return runner.run(step, run_name=name)
+        try:
+            return runner.run(step, run_name=name)
+        except StepAborted:
+            self._last_step_summary = getattr(runner, 'last_summary', None)
+            raise
 
     def start_step_async(self, axis, amplitude, pre_duration=2.0,
                          step_duration=5.0, post_duration=3.0, name=None) -> dict:
@@ -841,6 +852,7 @@ class HardwareManager:
             )
         except Exception as exc:
             self._step_error = str(exc)
+            self._step_partial = self._last_step_summary
             print(f"[step] background step failed: {exc}", file=sys.stderr)
 
     def get_step_status(self) -> dict:
@@ -851,7 +863,10 @@ class HardwareManager:
             if self._step_thread.is_alive():
                 return {"status": "running"}
             if self._step_error is not None:
-                return {"status": "error", "error": self._step_error}
+                resp = {"status": "error", "error": self._step_error}
+                if self._step_partial is not None:
+                    resp["partial_summary"] = self._step_partial
+                return resp
             if self._step_result is not None:
                 return {"status": "done", "summary": self._step_result}
             return {"status": "unknown"}
