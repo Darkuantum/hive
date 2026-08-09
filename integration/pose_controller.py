@@ -125,6 +125,12 @@ class PID:
         self._integral = 0.0
         self._prev_error = None
 
+        # Latest PID terms — populated after each update() for telemetry logging
+        self.last_p = 0.0
+        self.last_i = 0.0
+        self.last_d = 0.0
+        self.last_output = 0.0
+
     def update(self, error, dt):
         if dt <= 0:
             return 0.0
@@ -148,6 +154,13 @@ class PID:
 
         output = p_term + i_term + d_term
         output = max(-self.output_limit, min(self.output_limit, output))
+
+        # Store latest terms for telemetry
+        self.last_p = p_term
+        self.last_i = i_term
+        self.last_d = d_term
+        self.last_output = output
+
         return output
 
     def reset(self):
@@ -180,6 +193,22 @@ class PoseController:
         # you see persistent steady-state yaw error in testing.
         self.pid_yaw = PID(yaw_kp, yaw_ki, yaw_kd, output_limit=yaw_output_limit)
 
+        # Latest state populated after each compute() for telemetry logging
+        self.last_state = None
+
+    def update_gains(self, kp, ki, kd, yaw_kp, yaw_ki, yaw_kd):
+        """Update PID gains in place. Does NOT reset integrator state
+        (preserves windup behavior across live reloads)."""
+        self.pid_surge.kp = kp
+        self.pid_surge.ki = ki
+        self.pid_surge.kd = kd
+        self.pid_sway.kp = kp
+        self.pid_sway.ki = ki
+        self.pid_sway.kd = kd
+        self.pid_yaw.kp = yaw_kp
+        self.pid_yaw.ki = yaw_ki
+        self.pid_yaw.kd = yaw_kd
+
     def compute(self, x_cam, y_cam, z_cam, yaw_cam, dt):
         """Returns (vx, vy, yaw_rate) ready for
         mavlink_interface.send_velocity(). yaw_cam is the marker's
@@ -197,12 +226,32 @@ class PoseController:
         vy = self.pid_sway.update(error_sway, dt)
         yaw_rate = self.pid_yaw.update(error_yaw, dt)
 
+        # Populate last_state for telemetry logging
+        self.last_state = {
+            "surge": {
+                "setpoint": 0.0, "measured": x_body,
+                "p": self.pid_surge.last_p, "i": self.pid_surge.last_i,
+                "d": self.pid_surge.last_d, "out": self.pid_surge.last_output,
+            },
+            "sway": {
+                "setpoint": 0.0, "measured": y_body,
+                "p": self.pid_sway.last_p, "i": self.pid_sway.last_i,
+                "d": self.pid_sway.last_d, "out": self.pid_sway.last_output,
+            },
+            "yaw": {
+                "setpoint": 0.0, "measured": yaw_body,
+                "p": self.pid_yaw.last_p, "i": self.pid_yaw.last_i,
+                "d": self.pid_yaw.last_d, "out": self.pid_yaw.last_output,
+            },
+        }
+
         return vx, vy, yaw_rate
 
     def reset(self):
         self.pid_surge.reset()
         self.pid_sway.reset()
         self.pid_yaw.reset()
+        self.last_state = None
 
 
 # ---------------------------------------------------------------------

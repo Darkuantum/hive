@@ -37,6 +37,8 @@ Three background threads:
     auto mode always has a fresh pose to react to.
 """
 import math
+import os
+import sys
 import threading
 import time
 
@@ -49,6 +51,7 @@ CONTROL_TIMEOUT_S = 0.5    # manual mode only: zero sticks if nothing posted for
 CONTROL_RATE_HZ = 20
 CAMERA_JPEG_QUALITY = 80
 DEFAULT_MANUAL_POWER = 1.0  # 100% -- manual-mode thruster scale, resets here on every connect
+NEUTRAL_Z = 500             # neutral z in ArduSub manual_control (3-DOF vehicle, no heave actuator)
 
 VALID_MODES = ('manual', 'auto')
 
@@ -61,7 +64,8 @@ class HardwareManager:
     def __init__(self, mavlink_conn='/dev/serial0', mavlink_baud=57600,
                  enable_camera=True, camera_kwargs=None, enable_external=True,
                  enable_led=True, num_leds=8,
-                 pose_controller_kw=None, engine_kw=None):
+                 pose_controller_kw=None, engine_kw=None,
+                 gains_file=None):
         self.enable_camera = enable_camera
         self.enable_external = enable_external
 
@@ -112,7 +116,20 @@ class HardwareManager:
 
         # ---- mode + auto mode state ----
         self._mode = 'manual'
-        self.controller = PoseController(**(pose_controller_kw or {}))
+
+        # ---- gain loading: file gains fill in only what CLI didn't set ----
+        self._gains_file = gains_file
+        _pose_kw = dict(pose_controller_kw or {})
+        if gains_file is not None:
+            from calibration.io import Gains
+            file_gains = Gains.from_file(gains_file)
+            file_kw = file_gains.to_pose_controller_kwargs()
+            # Only fill keys not already set by CLI args (CLI takes precedence)
+            for key, val in file_kw.items():
+                if key not in _pose_kw:
+                    _pose_kw[key] = val
+
+        self.controller = PoseController(**_pose_kw)
         self.engine = DecisionEngine(**(engine_kw or {}))
         self._auto_status = {
             'state': self.engine.state.name,
@@ -127,6 +144,14 @@ class HardwareManager:
 
         self._stop = threading.Event()
         self._threads = []
+
+        # ---- calibration run state ----
+        self._run_lock = threading.Lock()  # protects run lifecycle transitions
+        self._run_handle = None           # RunHandle or None
+        self._run_logger = None           # TelemetryLogger or None
+        self._run_recorder = None         # VideoRecorder or None
+        self._run_active = False          # single boolean, GIL-atomic read
+        self._latest_frame_idx = -1      # written by camera thread, read by mavlink thread
 
     # ------------------------------------------------------------------
     # lifecycle
@@ -152,6 +177,12 @@ class HardwareManager:
         signal.signal(signal.SIGTERM, _on_signal)
 
     def stop(self):
+        # Finalize any active calibration run before stopping threads
+        if self._run_active:
+            try:
+                self.stop_logging_run()
+            except Exception as exc:
+                print(f"[run] error finalizing run on stop: {exc}", file=sys.stderr)
         self._stop.set()
         for t in self._threads:
             t.join(timeout=2)
@@ -310,6 +341,10 @@ class HardwareManager:
                     else:
                         x, y, r = self._current_manual_control()
 
+                    # Log telemetry if a calibration run is active
+                    if self._run_active:
+                        self._log_telemetry_tick(mode, x, y, r)
+
                     # Update LED status indicator
                     if self.led is not None:
                         error_state = None
@@ -348,6 +383,78 @@ class HardwareManager:
                 with self._lock:
                     self._mavlink_status = {'connected': False, 'error': str(exc)}
                 time.sleep(RECONNECT_DELAY_S)
+
+    def _log_telemetry_tick(self, mode, x, y, r):
+        """Build and log a telemetry row if a run is active.
+
+        Called from the MAVLink thread. Catches all errors to avoid
+        crashing the control loop.
+        """
+        logger = self._run_logger
+        if logger is None:
+            return
+
+        try:
+            telem = self.veh.get_telemetry_deg()
+            pose = self.get_pose()
+            aruco_visible = 1 if pose is not None else 0
+
+            # Yaw sources
+            yaw_pixhawk = telem.get('yaw')
+            yaw_aruco = pose['yaw'] if pose is not None else float('nan')
+
+            # PID state from controller (auto mode only; manual mode leaves empty)
+            pid_state = self.controller.last_state
+
+            # Motor commands: x/y/r are normalized -1..1, convert to -1000..1000
+            motor_x = int(x * 1000)
+            motor_y = int(y * 1000)
+            motor_z = NEUTRAL_Z  # neutral (3-DOF vehicle, no heave actuator)
+            motor_r = int(r * 1000)
+
+            # Battery voltage
+            battery_voltage = telem.get('battery_voltage', float('nan'))
+
+            # Build row
+            row = {
+                "ts": time.time(),
+                "frame_idx": self._latest_frame_idx,
+                "mode": mode,
+                "aruco_visible": aruco_visible,
+                "yaw_pixhawk_rad": yaw_pixhawk if yaw_pixhawk is not None else float('nan'),
+                "yaw_aruco_rad": yaw_aruco,
+            }
+
+            if pid_state is not None:
+                for axis in ('surge', 'sway', 'yaw'):
+                    s = pid_state[axis]
+                    row[f"{axis}_setpoint"] = s['setpoint']
+                    row[f"{axis}_measured"] = s['measured']
+                    row[f"{axis}_p"] = s['p']
+                    row[f"{axis}_i"] = s['i']
+                    row[f"{axis}_d"] = s['d']
+                    row[f"{axis}_out"] = s['out']
+            else:
+                # Manual mode or non-controlling auto: no PID state
+                for axis in ('surge', 'sway', 'yaw'):
+                    row[f"{axis}_setpoint"] = ""
+                    row[f"{axis}_measured"] = ""
+                    row[f"{axis}_p"] = ""
+                    row[f"{axis}_i"] = ""
+                    row[f"{axis}_d"] = ""
+                    row[f"{axis}_out"] = ""
+
+            row["motor_x"] = motor_x
+            row["motor_y"] = motor_y
+            row["motor_z"] = motor_z
+            row["motor_r"] = motor_r
+            row["battery_voltage"] = battery_voltage
+
+            logger.log(row)
+            self._run_handle.ticks_logged = logger.ticks_logged
+        except Exception as exc:
+            # Never crash the MAVLink thread
+            print(f"[telemetry] tick log error: {exc}", file=sys.stderr)
 
     def _current_manual_control(self):
         with self._lock:
@@ -495,6 +602,160 @@ class HardwareManager:
         return telem
 
     # ------------------------------------------------------------------
+    # calibration: run lifecycle, gains, telemetry logging
+    # ------------------------------------------------------------------
+    def start_logging_run(self, name=None):
+        """Start a calibration run. Returns {"run_id", "tmpfs_dir", "final_dir"}.
+        Idempotent: if a run is active, returns info for the existing run.
+        Initializes TelemetryLogger + VideoRecorder."""
+        with self._run_lock:
+            if self._run_active:
+                return {
+                    "run_id": self._run_handle.run_id,
+                    "tmpfs_dir": self._run_handle.tmpfs_dir,
+                    "final_dir": self._run_handle.final_dir,
+                }
+
+            from calibration.logging import start_run as _start_run
+            from calibration.video import VideoRecorder
+
+            handle = _start_run(name)
+            logger = None
+            recorder = None
+            video_path = None
+
+            try:
+                from calibration.logging import TelemetryLogger
+                logger = TelemetryLogger(handle.csv_path)
+
+                video_path = os.path.join(handle.tmpfs_dir, "video.mp4")
+                recorder = VideoRecorder(video_path)
+            except Exception as exc:
+                # Clean up on failure
+                if logger:
+                    try:
+                        logger.close()
+                    except Exception:
+                        pass
+                print(f"[run] failed to start run: {exc}", file=sys.stderr)
+                raise
+
+            self._run_handle = handle
+            self._run_logger = logger
+            self._run_recorder = recorder
+            self._run_active = True
+            self._latest_frame_idx = -1
+
+        return {
+            "run_id": handle.run_id,
+            "tmpfs_dir": handle.tmpfs_dir,
+            "final_dir": handle.final_dir,
+        }
+
+    def stop_logging_run(self):
+        """Stop the active run. Closes logger + recorder, syncs tmpfs -> final_dir.
+        Returns finalize_run() summary dict. If no active run, returns {"active": False}."""
+        with self._run_lock:
+            if not self._run_active:
+                return {"active": False}
+
+            # Close recorder first (stop writing frames)
+            if self._run_recorder is not None:
+                try:
+                    self._run_recorder.close()
+                    self._run_handle.frames_written = self._run_recorder.frame_idx
+                except Exception as exc:
+                    print(f"[run] error closing video recorder: {exc}", file=sys.stderr)
+
+            # Sync frame count from recorder to handle
+            if self._run_recorder is not None:
+                self._run_handle.frames_written = self._run_recorder.frame_idx
+
+            # Sync tick count from logger to handle
+            if self._run_logger is not None:
+                self._run_handle.ticks_logged = self._run_logger.ticks_logged
+
+            # Close logger
+            if self._run_logger is not None:
+                try:
+                    self._run_logger.close()
+                except Exception as exc:
+                    print(f"[run] error closing telemetry logger: {exc}", file=sys.stderr)
+
+            # Sync tmpfs -> final dir
+            from calibration.logging import finalize_run as _finalize_run
+            try:
+                summary = _finalize_run(self._run_handle)
+            except Exception as exc:
+                print(f"[run] error finalizing run: {exc}", file=sys.stderr)
+                summary = {
+                    "run_id": self._run_handle.run_id,
+                    "error": str(exc),
+                }
+
+            # Reset state
+            self._run_handle = None
+            self._run_logger = None
+            self._run_recorder = None
+            self._run_active = False
+            self._latest_frame_idx = -1
+
+        return summary
+
+    def get_active_run(self):
+        """Returns {"run_id", "frames_written", "ticks_logged", "duration_s"} or None."""
+        with self._run_lock:
+            if not self._run_active or self._run_handle is None:
+                return None
+            handle = self._run_handle
+            # Get latest counters
+            frames = handle.frames_written
+            ticks = handle.ticks_logged
+            if self._run_recorder is not None:
+                frames = self._run_recorder.frame_idx
+            if self._run_logger is not None:
+                ticks = self._run_logger.ticks_logged
+            return {
+                "run_id": handle.run_id,
+                "frames_written": frames,
+                "ticks_logged": ticks,
+                "duration_s": round(time.time() - handle.started_at, 2),
+            }
+
+    def reload_gains(self, path=None):
+        """Load gains from self._gains_file (or override path), apply to PoseController.
+        Returns the loaded gains dict. Raises if no gains_file configured."""
+        load_path = path or self._gains_file
+        if load_path is None:
+            raise ValueError("No gains file configured. Set --gains-file at startup.")
+
+        from calibration.io import Gains
+        gains = Gains.from_file(load_path)
+        kw = gains.to_pose_controller_kwargs()
+        self.controller.update_gains(
+            kp=kw['kp'], ki=kw['ki'], kd=kw['kd'],
+            yaw_kp=kw['yaw_kp'], yaw_ki=kw['yaw_ki'], yaw_kd=kw['yaw_kd'],
+        )
+        return gains.to_dict()
+
+    def save_gains(self, path=None):
+        """Snapshot current PoseController gains to file (default: self._gains_file or gains.json).
+        Returns the saved gains dict."""
+        save_path = path or self._gains_file or "gains.json"
+
+        from calibration.io import Gains
+        pid_s = self.controller.pid_surge
+        pid_w = self.controller.pid_sway
+        pid_y = self.controller.pid_yaw
+        gains = Gains(
+            surge_kp=pid_s.kp, surge_ki=pid_s.ki, surge_kd=pid_s.kd,
+            sway_kp=pid_w.kp, sway_ki=pid_w.ki, sway_kd=pid_w.kd,
+            yaw_kp=pid_y.kp, yaw_ki=pid_y.ki, yaw_kd=pid_y.kd,
+        )
+        gains.to_file(save_path)
+        return gains.to_dict()
+
+    # ------------------------------------------------------------------
     # camera: continuous capture + pose, latest-frame-wins
     # ------------------------------------------------------------------
     def _camera_thread(self):
@@ -524,6 +785,14 @@ class HardwareManager:
                             self._latest_pose = pose
                             self._latest_jpeg = jpeg.tobytes()
                             self._camera_status['error'] = None
+
+                    # Record frame if a calibration run is active
+                    if self._run_active and self._run_recorder is not None:
+                        try:
+                            idx = self._run_recorder.write(frame)
+                            self._latest_frame_idx = idx
+                        except Exception as exc:
+                            print(f"[video] write error: {exc}", file=sys.stderr)
             except Exception as exc:
                 with self._lock:
                     self._camera_status = {'connected': False, 'error': str(exc)}

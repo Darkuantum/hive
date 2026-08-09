@@ -128,6 +128,82 @@ def api_mode():
     return jsonify({'ok': True, 'ack': ack})
 
 
+# ------------------------------------------------------------------
+# Calibration API endpoints
+# ------------------------------------------------------------------
+
+@app.route('/api/calibrate/run/start', methods=['POST'])
+def api_calibrate_run_start():
+    """Start a calibration logging run. Optional body: {"name": "run_name"}."""
+    data = request.get_json(silent=True) or {}
+    try:
+        result = manager.start_logging_run(name=data.get('name'))
+        return jsonify({'ok': True, **result})
+    except Exception as exc:
+        return jsonify({'ok': False, 'error': str(exc)}), 500
+
+
+@app.route('/api/calibrate/run/stop', methods=['POST'])
+def api_calibrate_run_stop():
+    """Stop the active calibration run. Syncs tmpfs -> logs/."""
+    try:
+        result = manager.stop_logging_run()
+        return jsonify({'ok': True, **result})
+    except Exception as exc:
+        return jsonify({'ok': False, 'error': str(exc)}), 500
+
+
+@app.route('/api/calibrate/run/active')
+def api_calibrate_run_active():
+    """Get info about the active calibration run, or {"active": False}."""
+    result = manager.get_active_run()
+    if result is None:
+        return jsonify({'active': False})
+    return jsonify({'active': True, **result})
+
+
+@app.route('/api/calibrate/gains')
+def api_calibrate_gains():
+    """Return current PoseController gains as a JSON dict matching gains.json schema."""
+    try:
+        pid_s = manager.controller.pid_surge
+        pid_w = manager.controller.pid_sway
+        pid_y = manager.controller.pid_yaw
+        gains = {
+            "version": 1,
+            "surge": {"kp": pid_s.kp, "ki": pid_s.ki, "kd": pid_s.kd},
+            "sway":  {"kp": pid_w.kp, "ki": pid_w.ki, "kd": pid_w.kd},
+            "yaw":   {"kp": pid_y.kp, "ki": pid_y.ki, "kd": pid_y.kd},
+        }
+        return jsonify(gains)
+    except Exception as exc:
+        return jsonify({'ok': False, 'error': str(exc)}), 500
+
+
+@app.route('/api/calibrate/gains/save', methods=['POST'])
+def api_calibrate_gains_save():
+    """Save current PoseController gains to file. Optional body: {"path": "..."}."""
+    data = request.get_json(silent=True) or {}
+    try:
+        result = manager.save_gains(path=data.get('path'))
+        return jsonify({'ok': True, 'gains': result})
+    except Exception as exc:
+        return jsonify({'ok': False, 'error': str(exc)}), 500
+
+
+@app.route('/api/calibrate/gains/load', methods=['POST'])
+def api_calibrate_gains_load():
+    """Reload gains from configured file (or override path). Optional body: {"path": "..."}."""
+    data = request.get_json(silent=True) or {}
+    try:
+        result = manager.reload_gains(path=data.get('path'))
+        return jsonify({'ok': True, 'gains': result})
+    except ValueError as exc:
+        return jsonify({'ok': False, 'error': str(exc)}), 400
+    except Exception as exc:
+        return jsonify({'ok': False, 'error': str(exc)}), 500
+
+
 def _mjpeg_stream():
     boundary = b'--frame'
     while True:
@@ -172,6 +248,9 @@ def main():
     parser.add_argument('--yaw-kp', type=float, default=None, help='Yaw proportional gain')
     parser.add_argument('--yaw-ki', type=float, default=None, help='Yaw integral gain')
     parser.add_argument('--yaw-kd', type=float, default=None, help='Yaw derivative gain')
+    # Gains file (load PID gains from JSON; CLI args still override)
+    parser.add_argument('--gains-file', default=None, type=str,
+                         help='Path to gains.json for PID gain persistence')
     args = parser.parse_args()
 
     pose_kw = {}
@@ -188,6 +267,7 @@ def main():
         enable_led=not args.no_led,
         num_leds=args.num_leds,
         pose_controller_kw=pose_kw or None,
+        gains_file=args.gains_file,
     )
     manager.start()
     try:
