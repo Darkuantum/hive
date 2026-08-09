@@ -160,6 +160,7 @@ class HardwareManager:
         self._step_partial = None
         self._last_step_summary = None
         self._step_lock = threading.Lock()
+        self._step_abort = threading.Event()
 
     # ------------------------------------------------------------------
     # lifecycle
@@ -816,6 +817,7 @@ class HardwareManager:
 
             self._step_result = None
             self._step_error = None
+            self._step_abort.clear()
 
             from calibration.trajectories import StepInput
             step = StepInput(
@@ -870,6 +872,15 @@ class HardwareManager:
             if self._step_result is not None:
                 return {"status": "done", "summary": self._step_result}
             return {"status": "unknown"}
+
+    def abort_step(self) -> dict:
+        """Request abort of the currently running step (if any).
+        The step thread will detect this within one loop iteration (≤0.2s)
+        and raise StepAborted, triggering motor zeroing + run finalization."""
+        if self._step_thread is not None and self._step_thread.is_alive():
+            self._step_abort.set()
+            return {"abort_requested": True}
+        return {"abort_requested": False, "message": "no step is currently running"}
 
     # ------------------------------------------------------------------
     # camera: continuous capture + pose, latest-frame-wins

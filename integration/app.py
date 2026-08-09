@@ -207,7 +207,7 @@ def api_calibrate_gains_load():
 @app.route('/api/calibrate/step/run', methods=['POST'])
 def api_calibrate_step_run():
     """Start an open-loop step response in the background. Non-blocking."""
-    data = request.get_json() or {}
+    data = request.get_json(silent=True) or {}
     try:
         result = manager.start_step_async(
             axis=data.get('axis', 'surge'),
@@ -228,6 +228,12 @@ def api_calibrate_step_run():
 def api_calibrate_step_status():
     """Poll step execution status."""
     return jsonify(manager.get_step_status())
+
+
+@app.route('/api/calibrate/step/abort', methods=['POST'])
+def api_calibrate_step_abort():
+    """Abort the currently running step (if any). Motors zero, run finalized."""
+    return jsonify(manager.abort_step())
 
 
 @app.route('/api/calibrate/identify', methods=['POST'])

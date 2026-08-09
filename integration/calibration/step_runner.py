@@ -96,6 +96,10 @@ class StepRunner:
             if self.hm.is_shutting_down():
                 raise StepAborted("shutdown requested")
 
+            # Check abort: operator requested abort?
+            if self.hm._step_abort.is_set():
+                raise StepAborted("abort requested by operator")
+
             # Check abort: mode changed?
             if self.hm.get_control_mode() != 'manual':
                 raise StepAborted("control mode changed from 'manual' during step")

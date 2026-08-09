@@ -130,7 +130,8 @@ def cmd_step(args):
             print(f'Error: {status.get("error", "unknown")}', file=sys.stderr)
             return 1
 
-    print(f'Timeout ({timeout:.0f}s) — step may still be running', file=sys.stderr)
+    print(f'Timeout ({timeout:.0f}s) — step may still be running on the server.', file=sys.stderr)
+    print(f'  To abort: python3 {sys.argv[0]} abort --server {server}', file=sys.stderr)
     return 1
 
 
@@ -309,6 +310,27 @@ def _fmt_size(n):
 
 
 # ---------------------------------------------------------------------------
+# Subcommand: abort (online — requires running server)
+# ---------------------------------------------------------------------------
+
+def cmd_abort(args):
+    """Abort the currently running step on the server."""
+    server = args.server or os.environ.get('HIVE_SERVER', 'localhost:8000')
+    base = f'http://{server}'
+    try:
+        result = _http_post(f'{base}/api/calibrate/step/abort', {})
+    except Exception as exc:
+        print(f'Error: cannot reach server at {server}: {exc}', file=sys.stderr)
+        return 1
+
+    if result.get('abort_requested'):
+        print('Abort requested. Step will stop within 0.2s, motors zeroed, run finalized.')
+    else:
+        print(f'No step running: {result.get("message", "")}')
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # Argument parser
 # ---------------------------------------------------------------------------
 
@@ -360,6 +382,11 @@ def main():
     p_list.add_argument('--logs-dir', default='logs',
                         help='Logs directory (default: logs/)')
 
+    # abort
+    p_abort = subparsers.add_parser('abort', help='Abort running step (requires server)')
+    p_abort.add_argument('--server', default=None,
+                         help='Server host:port (default: localhost:8000 or HIVE_SERVER env)')
+
     args = parser.parse_args()
 
     if args.command == 'step':
@@ -370,6 +397,8 @@ def main():
         return cmd_apply(args)
     elif args.command == 'list':
         return cmd_list(args)
+    elif args.command == 'abort':
+        return cmd_abort(args)
 
 
 if __name__ == '__main__':
