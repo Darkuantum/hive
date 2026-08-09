@@ -51,7 +51,7 @@ These improvements live entirely in `camera/` and do not touch `integration/`.
 
 | ID | Improvement | Effort | Why |
 |---|---|---|---|
-| C6 | **Consolidate camera scripts** | 3h | The repo has accumulated 7+ variants (`aruco_detect`, `camFinal`, `cam12cm`, `camtest`, plus `tuningv2`'s `camtestv2`, `camtestv3`, `camtest_record`). Pick one canonical script, archive the rest. Coordinate with teammate since `tuningv2` is unmerged. |
+| C6 | ~~**Consolidate camera scripts**~~ ✅ Done | — | **Resolved** on `calibration` branch via `camera/README.md`: production module is `integration/camFinal.py`; standalone benchmark scripts documented with purpose/LED/features table and "which script to use" guide. Scripts kept accessible (each tests a different config) rather than archived. Earlier iterations already in `camera/archive/`. |
 | C7 | **Stop committing `camera/results/` scratch data** | 15min | 33+ scratch test files are tracked in git. Add `camera/results/` to `.gitignore`. Test data should not live in the repo long-term. |
 
 ### Calibration
@@ -164,7 +164,7 @@ These are QGroundControl parameter changes and bench tests, not code changes.
 | 12 | P4/P5 | Depth limit + battery failsafe | Tank insurance |
 | 13 | I13/P3 | Leak via MAVLink SYS_STATUS | Independent failsafe path if Pi dies |
 | 14 | D1/D2 | Fix README (heave, architecture) | Correct the project record |
-| 15 | C6 | Consolidate camera scripts | Reduce confusion for the team |
+| 15 | ~~C6~~ ✅ | Consolidate camera scripts | **Done** — documented via `camera/README.md` |
 | 16 | C8 | Real checkerboard calibration | Better pose accuracy at docking range |
 
 ### Phase 3: Nice-to-have (if time permits)
