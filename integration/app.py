@@ -236,6 +236,52 @@ def api_calibrate_step_abort():
     return jsonify(manager.abort_step())
 
 
+@app.route('/api/calibrate/metrics', methods=['POST'])
+def api_calibrate_metrics():
+    """Compute closed-loop tracking metrics from a telemetry CSV."""
+    data = request.get_json(silent=True) or {}
+    csv_path = data.get('csv_path')
+    axis = data.get('axis', 'surge')
+    setpoint = data.get('setpoint')
+    if not csv_path:
+        return jsonify({"error": "csv_path required"}), 400
+    try:
+        from calibration.metrics import compute_metrics
+        m = compute_metrics(csv_path, axis=axis,
+                            setpoint=float(setpoint) if setpoint else None)
+        return jsonify({
+            "axis": m.axis,
+            "setpoint": m.setpoint,
+            "overshoot_pct": m.overshoot_pct,
+            "settling_time_s": m.settling_time_s,
+            "rise_time_s": m.rise_time_s,
+            "steady_state_error": m.steady_state_error,
+            "tracking_rmse": m.tracking_rmse,
+        })
+    except (ValueError, FileNotFoundError, TypeError) as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.route('/api/calibrate/cl-step/run', methods=['POST'])
+def api_calibrate_cl_step_run():
+    """Start a closed-loop validation step in the background. Non-blocking."""
+    data = request.get_json(silent=True) or {}
+    try:
+        result = manager.start_cl_step_async(
+            axis=data.get('axis', 'surge'),
+            setpoint=float(data.get('setpoint', 0.1)),
+            hold_duration=float(data.get('hold_duration', 5.0)),
+            pre_duration=float(data.get('pre_duration', 2.0)),
+            post_duration=float(data.get('post_duration', 3.0)),
+            name=data.get('name'),
+        )
+        return jsonify(result)
+    except (ValueError, TypeError) as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route('/api/calibrate/identify', methods=['POST'])
 def api_calibrate_identify():
     """Run offline identification on a CSV file. Synchronous."""

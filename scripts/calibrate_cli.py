@@ -5,12 +5,14 @@ Subcommands:
   step      Run an open-loop step on the vehicle (requires running server)
   identify  Fit a first-order model from a telemetry CSV (offline)
   apply     Identify + save computed gains to a JSON file (offline)
+  metrics   Compute closed-loop tracking metrics from a telemetry CSV (offline)
   list      List past calibration runs (offline)
 
 Usage:
   python scripts/calibrate_cli.py step --axis surge --amplitude 0.3
   python scripts/calibrate_cli.py identify --csv logs/20260809/telemetry.csv --axis surge
   python scripts/calibrate_cli.py apply --csv logs/20260809/telemetry.csv --axis surge
+  python scripts/calibrate_cli.py metrics --csv logs/<run_id>/telemetry.csv --axis surge
   python scripts/calibrate_cli.py list
 """
 
@@ -310,6 +312,35 @@ def _fmt_size(n):
 
 
 # ---------------------------------------------------------------------------
+# Subcommand: metrics (offline)
+# ---------------------------------------------------------------------------
+
+def cmd_metrics(args):
+    try:
+        from calibration.metrics import compute_metrics
+    except ImportError as exc:
+        print(f'Cannot import calibration modules: {exc}', file=sys.stderr)
+        return 1
+
+    csv_path = args.csv
+    if not os.path.exists(csv_path):
+        print(f'CSV not found: {csv_path}', file=sys.stderr)
+        return 1
+
+    sp = float(args.setpoint) if args.setpoint is not None else None
+
+    try:
+        m = compute_metrics(csv_path, axis=args.axis, setpoint=sp)
+    except Exception as exc:
+        print(f'Metrics computation failed: {exc}', file=sys.stderr)
+        return 1
+
+    print(f'=== Closed-loop tracking metrics ===')
+    print(f'  {m.summary()}')
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # Subcommand: abort (online — requires running server)
 # ---------------------------------------------------------------------------
 
@@ -377,6 +408,15 @@ def main():
     p_apply.add_argument('--force', '-f', action='store_true',
                          help='overwrite existing gains file without prompting')
 
+    # metrics
+    p_metrics = subparsers.add_parser('metrics',
+                                       help='Compute closed-loop tracking metrics (offline)')
+    p_metrics.add_argument('--csv', required=True, help='Path to telemetry.csv')
+    p_metrics.add_argument('--axis', default='surge', choices=['surge', 'sway', 'yaw'],
+                           help='Axis to analyse (default: surge)')
+    p_metrics.add_argument('--setpoint', type=float, default=None,
+                           help='Target setpoint (default: auto-detect from data)')
+
     # list
     p_list = subparsers.add_parser('list', help='List past calibration runs (offline)')
     p_list.add_argument('--logs-dir', default='logs',
@@ -395,6 +435,8 @@ def main():
         return cmd_identify(args)
     elif args.command == 'apply':
         return cmd_apply(args)
+    elif args.command == 'metrics':
+        return cmd_metrics(args)
     elif args.command == 'list':
         return cmd_list(args)
     elif args.command == 'abort':

@@ -184,6 +184,11 @@ class HardwareManager:
         self._step_lock = threading.Lock()
         self._step_abort = threading.Event()
 
+        # ---- closed-loop setpoint offset (for validation step runs) ----
+        self._cl_setpoint_x = 0.0
+        self._cl_setpoint_y = 0.0
+        self._cl_setpoint_yaw = 0.0
+
         # ---- velocity damper (None when disabled) ----
         self._damper_x = None
         self._damper_y = None
@@ -552,8 +557,15 @@ class HardwareManager:
             }
 
         if self.engine.is_controlling() and marker_detected:
+            # Apply CL setpoint offset for validation runs.  The
+            # DecisionEngine has already seen the true pose above;
+            # we subtract the offset so PoseController.compute() drives
+            # to the offset position instead of zero.
+            x_eff = pose['x'] - self._cl_setpoint_x
+            y_eff = pose['y'] - self._cl_setpoint_y
+            yaw_eff = pose['yaw'] - self._cl_setpoint_yaw
             vx, vy, yaw_rate = self.controller.compute(
-                pose['x'], pose['y'], pose['z'], pose['yaw'], dt
+                x_eff, y_eff, pose['z'], yaw_eff, dt
             )
             x = vx / self.controller.pid_surge.output_limit
             y = vy / self.controller.pid_sway.output_limit
@@ -922,6 +934,100 @@ class HardwareManager:
             self._step_abort.set()
             return {"abort_requested": True}
         return {"abort_requested": False, "message": "no step is currently running"}
+
+    # ------------------------------------------------------------------
+    # closed-loop validation step
+    # ------------------------------------------------------------------
+    def set_cl_setpoint(self, dx: float, dy: float, dyaw: float):
+        """Set closed-loop setpoint offset for validation step runs."""
+        self._cl_setpoint_x = dx
+        self._cl_setpoint_y = dy
+        self._cl_setpoint_yaw = dyaw
+
+    def clear_cl_setpoint(self):
+        """Clear closed-loop setpoint offset."""
+        self._cl_setpoint_x = 0.0
+        self._cl_setpoint_y = 0.0
+        self._cl_setpoint_yaw = 0.0
+
+    def run_closed_loop_step(self, axis: str, setpoint: float,
+                            hold_duration: float = 5.0,
+                            pre_duration: float = 2.0,
+                            post_duration: float = 3.0,
+                            name: str = None) -> dict:
+        """Execute a closed-loop step response for PID validation.
+
+        Switches to AUTO mode, injects a setpoint offset so the PID
+        drives to a known target, then clears the offset and restores
+        the original mode.  Returns the logging summary.
+
+        Raises StepAborted if marker lost or mode changed during execution.
+        """
+        from calibration.closed_loop_runner import ClosedLoopStep, ClosedLoopRunner, StepAborted
+
+        step = ClosedLoopStep(
+            axis=axis, setpoint=setpoint,
+            hold_duration=hold_duration,
+            pre_duration=pre_duration,
+            post_duration=post_duration,
+        )
+        runner = ClosedLoopRunner(self)
+        try:
+            return runner.run(step, run_name=name)
+        except StepAborted:
+            self._last_step_summary = getattr(runner, 'last_summary', None)
+            raise
+
+    def start_cl_step_async(self, axis, setpoint, hold_duration=5.0,
+                            pre_duration=2.0, post_duration=3.0, name=None) -> dict:
+        """Start a closed-loop validation step in a background thread. Non-blocking.
+        Shares the same _step_thread/_step_lock as open-loop so only one step
+        can run at a time.  Status polled via get_step_status()."""
+        with self._step_lock:
+            if self._step_thread is not None and self._step_thread.is_alive():
+                return {"status": "already_running",
+                        "message": "a step is already running; check /step/status"}
+
+            self._step_result = None
+            self._step_error = None
+            self._step_abort.clear()
+
+            from calibration.closed_loop_runner import ClosedLoopStep
+            step = ClosedLoopStep(
+                axis=axis, setpoint=setpoint,
+                hold_duration=hold_duration,
+                pre_duration=pre_duration, post_duration=post_duration,
+            )
+            step.validate()
+
+            estimated = step.total_duration()
+
+            self._step_thread = threading.Thread(
+                target=self._cl_step_worker,
+                args=(axis, setpoint, hold_duration, pre_duration, post_duration, name),
+                daemon=True,
+            )
+            self._step_thread.start()
+
+        return {
+            "status": "running",
+            "axis": axis,
+            "setpoint": setpoint,
+            "hold_duration": hold_duration,
+            "estimated_duration": round(estimated, 1),
+        }
+
+    def _cl_step_worker(self, axis, setpoint, hold_duration, pre_duration, post_duration, name):
+        """Background worker — runs the blocking closed-loop step, stores result/error."""
+        try:
+            self._step_result = self.run_closed_loop_step(
+                axis=axis, setpoint=setpoint, hold_duration=hold_duration,
+                pre_duration=pre_duration, post_duration=post_duration, name=name,
+            )
+        except Exception as exc:
+            self._step_error = str(exc)
+            self._step_partial = getattr(self, '_last_step_summary', None)
+            print(f"[cl-step] background closed-loop step failed: {exc}", file=sys.stderr)
 
     # ------------------------------------------------------------------
     # velocity damper: accel bias calibration
