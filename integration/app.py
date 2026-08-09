@@ -299,6 +299,21 @@ def api_calibrate_runs():
         return jsonify({"runs": []})
 
 
+@app.route('/api/calibrate/damper/calibrate', methods=['POST'])
+def api_calibrate_damper_calibrate():
+    """Run accel bias calibration (keep vehicle still). Blocking for ~3s."""
+    data = request.get_json(silent=True) or {}
+    duration = float(data.get('duration', 3.0))
+    if manager._damper_x is None:
+        return jsonify({"error": "velocity damper not enabled "
+                            "(check gains.json velocity_damper.enabled)"}), 400
+    try:
+        result = manager.calibrate_accel_bias(duration)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 def _mjpeg_stream():
     boundary = b'--frame'
     while True:

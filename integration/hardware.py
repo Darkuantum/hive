@@ -120,6 +120,7 @@ class HardwareManager:
         # ---- gain loading: file gains fill in only what CLI didn't set ----
         self._gains_file = gains_file
         _pose_kw = dict(pose_controller_kw or {})
+        file_gains = None  # type: ignore[assignment]
         if gains_file is not None:
             from calibration.io import Gains
             file_gains = Gains.from_file(gains_file)
@@ -131,6 +132,27 @@ class HardwareManager:
 
         self.controller = PoseController(**_pose_kw)
         self.engine = DecisionEngine(**(engine_kw or {}))
+
+        # Create velocity damper instances if enabled in gains
+        if gains_file is not None and file_gains is not None and file_gains.damper_enabled:
+            from velocity_damper import VelocityDamper
+            self._damper_x = VelocityDamper(
+                kv=file_gains.damper_kv,
+                vel_leak=file_gains.damper_vel_leak,
+                accel_lpf_hz=file_gains.damper_accel_lpf_hz,
+                accel_deadband=file_gains.damper_accel_deadband,
+                out_limit=self.controller.pid_surge.output_limit,
+            )
+            self._damper_y = VelocityDamper(
+                kv=file_gains.damper_kv,
+                vel_leak=file_gains.damper_vel_leak,
+                accel_lpf_hz=file_gains.damper_accel_lpf_hz,
+                accel_deadband=file_gains.damper_accel_deadband,
+                out_limit=self.controller.pid_sway.output_limit,
+            )
+            print(f"[damper] enabled (kv={file_gains.damper_kv}, "
+                  f"vel_leak={file_gains.damper_vel_leak})")
+
         self._auto_status = {
             'state': self.engine.state.name,
             'controlling': False,
@@ -161,6 +183,12 @@ class HardwareManager:
         self._last_step_summary = None
         self._step_lock = threading.Lock()
         self._step_abort = threading.Event()
+
+        # ---- velocity damper (None when disabled) ----
+        self._damper_x = None
+        self._damper_y = None
+        self._accel_bias_x = 0.0
+        self._accel_bias_y = 0.0
 
     # ------------------------------------------------------------------
     # lifecycle
@@ -538,7 +566,20 @@ class HardwareManager:
             if yaw_debug is not None:
                 yaw_debug['yaw_saturated'] = abs(r) >= 0.999
         else:
-            x = y = r = 0.0
+            # Marker lost: apply velocity damper if configured
+            if self._damper_x is not None and self._damper_y is not None:
+                telem_raw = self.veh.get_telemetry()
+                damp_x = self._damper_x.update(
+                    (telem_raw.get('accel_x', 0.0) or 0.0) - self._accel_bias_x
+                )
+                damp_y = self._damper_y.update(
+                    (telem_raw.get('accel_y', 0.0) or 0.0) - self._accel_bias_y
+                )
+                x = damp_x / self.controller.pid_surge.output_limit
+                y = damp_y / self.controller.pid_sway.output_limit
+                r = 0.0  # no yaw damper (gyro-derived angular accel is too noisy)
+            else:
+                x = y = r = 0.0
             self.controller.reset()
 
         with self._lock:
@@ -881,6 +922,45 @@ class HardwareManager:
             self._step_abort.set()
             return {"abort_requested": True}
         return {"abort_requested": False, "message": "no step is currently running"}
+
+    # ------------------------------------------------------------------
+    # velocity damper: accel bias calibration
+    # ------------------------------------------------------------------
+    def calibrate_accel_bias(self, duration_s: float = 3.0) -> dict:
+        """Sample stationary accel for N seconds to capture mounting tilt + sensor offset.
+
+        Must be called while the vehicle is still (on deck, in water, etc.).
+        Resets damper velocity estimates after calibration.
+        Returns {"bias_x": ..., "bias_y": ..., "n_samples": ...}.
+        """
+        print(f"[damper] Sampling accel bias for {duration_s:.1f}s — keep the vehicle still...")
+        sum_x = sum_y = 0.0
+        n = 0
+        deadline = time.monotonic() + duration_s
+        while time.monotonic() < deadline:
+            telem = self.veh.get_telemetry()
+            ax = telem.get('accel_x', 0.0) or 0.0
+            ay = telem.get('accel_y', 0.0) or 0.0
+            sum_x += ax
+            sum_y += ay
+            n += 1
+            time.sleep(0.05)  # 20 Hz sampling
+
+        if n > 0:
+            self._accel_bias_x = sum_x / n
+            self._accel_bias_y = sum_y / n
+
+        # Reset dampers to start fresh
+        if self._damper_x is not None:
+            self._damper_x.reset()
+        if self._damper_y is not None:
+            self._damper_y.reset()
+
+        result = {"bias_x": self._accel_bias_x, "bias_y": self._accel_bias_y,
+                  "n_samples": n}
+        print(f"[damper] Bias captured: ax={self._accel_bias_x:+.4f} "
+              f"ay={self._accel_bias_y:+.4f} m/s² ({n} samples)")
+        return result
 
     # ------------------------------------------------------------------
     # camera: continuous capture + pose, latest-frame-wins

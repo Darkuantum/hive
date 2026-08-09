@@ -1,6 +1,13 @@
 {
-  "version": 1,
+  "version": 2,
   "surge": {"kp": 0.6, "ki": 0.05, "kd": 0.15},
   "sway":  {"kp": 0.6, "ki": 0.05, "kd": 0.15},
-  "yaw":   {"kp": 0.8, "ki": 0.0, "kd": 0.1}
+  "yaw":   {"kp": 0.8, "ki": 0.0, "kd": 0.1},
+  "velocity_damper": {
+    "enabled": false,
+    "kv": 0.5,
+    "vel_leak": 0.5,
+    "accel_lpf_hz": 5.0,
+    "accel_deadband": 0.05
+  }
 }
