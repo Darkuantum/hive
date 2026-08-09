@@ -30,6 +30,43 @@ by the integration layer.
 - **Simple recording without LED** → `camtest_record.py`
 - **Image enhancement tuning** → `camtestv4.py` (dehaze/CLAHE controls)
 
+## Usage
+
+All scripts accept `--help` for the full option list. Common patterns:
+
+```bash
+# Recommended: latest benchmark with LED + recording + CSV logging
+uv run python camera/camtestv5.py
+
+# Headless over SSH (no preview window)
+uv run python camera/camtestv5.py --no-preview
+
+# Disable recording (CSV-only run)
+uv run python camera/camtestv5.py --no-record
+
+# LED illumination test
+uv run python camera/camtestv3_led.py --led
+
+# Dual-LED hardware test
+uv run python camera/camtestv3_led_dual.py --led
+
+# Simple recording without LED or enhancements
+uv run python camera/camtest_record.py
+
+# Image enhancement tuning (dehaze/CLAHE/denoise controls)
+uv run python camera/camtestv4.py --white-balance --denoise
+
+# Full options for any script
+uv run python camera/camtestv5.py --help
+```
+
+Common options across scripts: `--record`/`--no-record`, `--auto-log`,
+`--dehaze`, `--white-balance`, `--clahe`/`--no-clahe`, `--denoise`,
+`--temporal-filter`. LED variants add `--led`/`--no-led`.
+`camtestv5.py` adds `--id-filter`/`--no-id-filter` for target-ID lock.
+
+Results are written to `camera/results/` (CSV trial logs + screen recordings).
+
 ## Library
 
 **`underwater_pipeline.py`** — image enhancement library (dehaze, white

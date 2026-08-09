@@ -136,21 +136,21 @@ dependencies as needed.
 
 ### Camera scripts (`camera/`)
 
-`aruco_detect.py` is the minimal detector. It uses the legacy OpenCV ArUco API
-(`cv2.aruco.Dictionary_get`, `cv2.aruco.detectMarkers`), which requires
-**opencv-contrib-python < 4.7**:
+See `camera/README.md` for the full guide to all scripts. Quick reference:
 
 ```bash
-uv pip install opencv-contrib-python numpy picamera2
+# Recommended benchmark (latest, with LED + recording + CSV logging)
+uv run python camera/camtestv5.py
 
-uv run python camera/aruco_detect.py               # live preview
-uv run python camera/aruco_detect.py --no-preview   # headless over SSH
-uv run python camera/aruco_detect.py --dict DICT_5X5_50 --width 1920 --height 1080
+# Headless over SSH
+uv run python camera/camtestv5.py --no-preview
+
+# Full options
+uv run python camera/camtestv5.py --help
 ```
 
-`camFinal.py` adds 6-DOF pose estimation. `camtest.py` is the trial-logging
-harness with live exposure/gain tuning and underwater preprocessing; run with
-`--help` for the experiment workflow.
+`integration/camFinal.py` is the production detection module imported by the
+running stack — don't substitute standalone scripts for it.
 
 ### Integrated stack (`integration/`)
 
@@ -171,6 +171,43 @@ uv run python app.py --no-camera --no-external --mavlink-conn udp:127.0.0.1:1455
 Open `http://<pi-ip>:8000` from a browser on the same LAN. Manual D-pad
 control and auto (camera-following) mode are both available. The simpler
 `webui/app.py` serves a monitoring-only variant with the same pattern.
+
+### PID Calibration (`scripts/calibrate_cli.py`)
+
+The calibration system collects step-response data, fits a first-order plant
+model, computes PID gains via λ/IMC tuning, and verifies tracking. Accessible
+from CLI, WebUI dashboard, or REST API.
+
+```bash
+# Start the integration server first (see above), then:
+
+# 1. Run an open-loop step response (vehicle executes a thrust step)
+uv run python scripts/calibrate_cli.py step --axis surge --amplitude 0.3 --step-duration 5
+
+# 2. Identify the plant model from the recorded CSV (offline, no server needed)
+uv run python scripts/calibrate_cli.py identify --csv logs/<run_id>/telemetry.csv --axis surge
+
+# 3. Save computed gains to gains.json
+uv run python scripts/calibrate_cli.py apply --csv logs/<run_id>/telemetry.csv --axis surge --output gains.json --force
+
+# 4. List past runs
+uv run python scripts/calibrate_cli.py list
+
+# 5. Abort a running step
+uv run python scripts/calibrate_cli.py abort
+
+# Closed-loop validation + metrics (verify gains track well):
+uv run python scripts/calibrate_cli.py metrics --csv logs/<cl_run_id>/telemetry.csv --axis surge --setpoint 0.1
+
+# Full help for any subcommand
+uv run python scripts/calibrate_cli.py --help
+```
+
+The WebUI calibration dashboard (same browser URL) provides the same workflow
+with live status polling, model/gain display with R² fit quality, and
+one-click identify/apply. Gains are loaded at startup from `gains.json`
+(override with `--gains-file`). The velocity damper (station-keep resilience
+when marker is lost) is configured in the same file — see `gains.json.example`.
 
 ### Sensor tests (`positioning/`, `led/`)
 
