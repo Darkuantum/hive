@@ -204,6 +204,95 @@ def api_calibrate_gains_load():
         return jsonify({'ok': False, 'error': str(exc)}), 500
 
 
+@app.route('/api/calibrate/step/run', methods=['POST'])
+def api_calibrate_step_run():
+    """Start an open-loop step response in the background. Non-blocking."""
+    data = request.get_json() or {}
+    try:
+        result = manager.start_step_async(
+            axis=data.get('axis', 'surge'),
+            amplitude=float(data.get('amplitude', 0.3)),
+            pre_duration=float(data.get('pre_duration', 2.0)),
+            step_duration=float(data.get('step_duration', 5.0)),
+            post_duration=float(data.get('post_duration', 3.0)),
+            name=data.get('name'),
+        )
+        return jsonify(result)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/calibrate/step/status', methods=['GET'])
+def api_calibrate_step_status():
+    """Poll step execution status."""
+    return jsonify(manager.get_step_status())
+
+
+@app.route('/api/calibrate/identify', methods=['POST'])
+def api_calibrate_identify():
+    """Run offline identification on a CSV file. Synchronous."""
+    data = request.get_json() or {}
+    csv_path = data.get('csv_path')
+    axis = data.get('axis', 'surge')
+    tau_cl_raw = data.get('tau_cl')
+
+    if not csv_path:
+        return jsonify({"error": "csv_path required"}), 400
+
+    try:
+        from calibration.identify import identify_from_csv
+        from calibration.tuning import compute_gains
+
+        model = identify_from_csv(csv_path, axis=axis)
+        tau_cl = float(tau_cl_raw) if tau_cl_raw is not None else None
+        result = compute_gains(model, tau_cl=tau_cl)
+
+        return jsonify({
+            "model": {
+                "axis": model.axis, "K": model.K, "tau": model.tau,
+                "L": model.L, "v_ss": model.v_ss, "F_step": model.F_step,
+                "R_squared": model.R_squared, "n_samples": model.n_samples,
+            },
+            "tuning": {
+                "Kp": result.Kp, "Ki": result.Ki, "Kd": result.Kd,
+                "tau_cl": result.tau_cl, "K_eff": result.K_eff,
+                "method": result.method, "notes": result.notes,
+            },
+            "gains": result.gains.to_dict(),
+        })
+    except (ValueError, FileNotFoundError) as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/calibrate/runs', methods=['GET'])
+def api_calibrate_runs():
+    """List past calibration runs from logs/."""
+    import os
+    logs_dir = 'logs'
+    try:
+        entries = []
+        for name in sorted(os.listdir(logs_dir), reverse=True):
+            run_dir = os.path.join(logs_dir, name)
+            if not os.path.isdir(run_dir):
+                continue
+            csv_path = os.path.join(run_dir, 'telemetry.csv')
+            video_path = os.path.join(run_dir, 'video.mp4')
+            entries.append({
+                "run_id": name,
+                "has_csv": os.path.exists(csv_path),
+                "has_video": os.path.exists(video_path),
+                "csv_size": os.path.getsize(csv_path) if os.path.exists(csv_path) else 0,
+                "video_size": os.path.getsize(video_path) if os.path.exists(video_path) else 0,
+            })
+        return jsonify({"runs": entries})
+    except FileNotFoundError:
+        return jsonify({"runs": []})
+
+
 def _mjpeg_stream():
     boundary = b'--frame'
     while True:

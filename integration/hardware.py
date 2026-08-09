@@ -153,6 +153,12 @@ class HardwareManager:
         self._run_active = False          # single boolean, GIL-atomic read
         self._latest_frame_idx = -1      # written by camera thread, read by mavlink thread
 
+        # ---- async step execution state ----
+        self._step_thread = None
+        self._step_result = None
+        self._step_error = None
+        self._step_lock = threading.Lock()
+
     # ------------------------------------------------------------------
     # lifecycle
     # ------------------------------------------------------------------
@@ -786,6 +792,69 @@ class HardwareManager:
         )
         runner = StepRunner(self)
         return runner.run(step, run_name=name)
+
+    def start_step_async(self, axis, amplitude, pre_duration=2.0,
+                         step_duration=5.0, post_duration=3.0, name=None) -> dict:
+        """Start an open-loop step in a background thread. Non-blocking.
+        Returns dict with status ('running' or 'already_running') + parameters.
+        Thread runs the blocking run_open_loop_step() and stores result/error."""
+        with self._step_lock:
+            if self._step_thread is not None and self._step_thread.is_alive():
+                return {"status": "already_running",
+                        "message": "a step is already running; check /step/status"}
+
+            self._step_result = None
+            self._step_error = None
+
+            from calibration.trajectories import StepInput
+            step = StepInput(
+                axis=axis, amplitude=amplitude,
+                pre_duration=pre_duration, step_duration=step_duration,
+                post_duration=post_duration,
+            )
+            step.validate()  # raises ValueError on bad axis; clamps amplitude/durations
+
+            estimated = step.total_duration()
+
+            self._step_thread = threading.Thread(
+                target=self._step_worker,
+                args=(axis, amplitude, pre_duration, step_duration, post_duration, name),
+                daemon=True,
+            )
+            self._step_thread.start()
+
+        return {
+            "status": "running",
+            "axis": axis,
+            "amplitude": amplitude,
+            "step_duration": step_duration,
+            "estimated_duration": round(estimated, 1),
+        }
+
+    def _step_worker(self, axis, amplitude, pre_duration, step_duration, post_duration, name):
+        """Background worker — runs the blocking step, stores result or error."""
+        try:
+            self._step_result = self.run_open_loop_step(
+                axis=axis, amplitude=amplitude,
+                pre_duration=pre_duration, step_duration=step_duration,
+                post_duration=post_duration, name=name,
+            )
+        except Exception as exc:
+            self._step_error = str(exc)
+            print(f"[step] background step failed: {exc}", file=sys.stderr)
+
+    def get_step_status(self) -> dict:
+        """Returns current step status: idle | running | done | error."""
+        with self._step_lock:
+            if self._step_thread is None:
+                return {"status": "idle"}
+            if self._step_thread.is_alive():
+                return {"status": "running"}
+            if self._step_error is not None:
+                return {"status": "error", "error": self._step_error}
+            if self._step_result is not None:
+                return {"status": "done", "summary": self._step_result}
+            return {"status": "unknown"}
 
     # ------------------------------------------------------------------
     # camera: continuous capture + pose, latest-frame-wins
