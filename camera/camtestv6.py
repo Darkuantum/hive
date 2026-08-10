@@ -107,7 +107,7 @@ CONTROLS:
   l                   -- toggle LED auto-adjust (keep lux under --max-lux)
 
 USAGE:
-  python3 camtestv5_9cond.py --condition 4 --position plusx --distance-cm 40 \\
+  python3 camtestv6.py --condition 4 --position plusx --distance-cm 40 \\
       --turbidity-ntu 40 --csv results/9cond.csv
 
 CSV COLUMNS:
