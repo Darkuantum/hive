@@ -516,13 +516,15 @@ def main():
     led_group.add_argument("--led1-data-pin", default="MOSI",
                             help="board.* pin name for strip 1's data line (default: MOSI -- "
                                  "hardware SPI MOSI). Paired with --led1-clock-pin.")
-    led_group.add_argument("--led2-clock-pin", default="D5",
-                            help="board.* pin name for strip 2's clock line (default: D5). Must "
-                                 "differ from strip 1's pins -- the Pi only has one hardware SPI "
-                                 "clock/MOSI pair, so this strip runs over bitbang (software) "
+    led_group.add_argument("--led2-clock-pin", default="D12",
+                            help="board.* pin name for strip 2's clock line (default: D12, "
+                                 "physical pin 32 -- moved off D5/pin29 after that pin was fried). "
+                                 "Must differ from strip 1's pins -- the Pi only has one hardware "
+                                 "SPI clock/MOSI pair, so this strip runs over bitbang (software) "
                                  "SPI on whatever GPIO you wire it to.")
-    led_group.add_argument("--led2-data-pin", default="D6",
-                            help="board.* pin name for strip 2's data line (default: D6). Paired "
+    led_group.add_argument("--led2-data-pin", default="D13",
+                            help="board.* pin name for strip 2's data line (default: D13, physical "
+                                 "pin 33 -- moved off D6/pin31 after that pin was fried). Paired "
                                  "with --led2-clock-pin.")
     led_group.add_argument("--max-lux", type=float, default=150.0,
                             help="Lux ceiling the LED auto-adjust loop targets (default: 150). "
