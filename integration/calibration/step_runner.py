@@ -72,7 +72,11 @@ class StepRunner:
 
         finally:
             # ALWAYS: zero motors, restore mode, stop logging
-            self.hm.set_control(0.0, 0.0, 0.0)
+            # _from_step=True: _step_owns_control is still True here (the
+            # caller clears it after this returns) -- without this flag
+            # the safety zero itself would be silently dropped by the
+            # very guard that's supposed to protect the step.
+            self.hm.set_control(0.0, 0.0, 0.0, _from_step=True)
             try:
                 self.hm.set_control_mode(original_mode)
             except Exception:
@@ -118,5 +122,5 @@ class StepRunner:
                     marker_lost_since = None
 
             # Send command
-            self.hm.set_control(*command)
+            self.hm.set_control(*command, _from_step=True)
             time.sleep(UPDATE_PERIOD)

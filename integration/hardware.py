@@ -184,6 +184,15 @@ class HardwareManager:
         self._last_step_summary = None
         self._step_lock = threading.Lock()
         self._step_abort = threading.Event()
+        # While a step is running, ignore /api/control posts from OTHER
+        # clients -- manual mode obeys whoever posts last regardless of
+        # source, so a stray browser tab left open (still sending its
+        # idle-zero heartbeat) races the step's own commands and corrupts
+        # the logged motor_x/response data. Confirmed live: motor_x
+        # flickered 150/0/0/150 every tick during a step instead of
+        # holding steady, because another connected client's heartbeat
+        # kept zeroing it out between the step's own sends.
+        self._step_owns_control = False
 
         # ---- closed-loop setpoint offset (for validation step runs) ----
         self._cl_setpoint_x = 0.0
@@ -604,12 +613,20 @@ class HardwareManager:
             }
         return x, y, r
 
-    def set_control(self, x, y, r):
+    def set_control(self, x, y, r, _from_step=False):
         """Manual-mode stick input from the web UI. Silently has no
         effect while in auto mode -- the mavlink thread only reads
         this in 'manual' mode -- but we still store it, so switching
         back to manual doesn't require an extra click before sticks
-        respond."""
+        respond.
+
+        While a calibration step owns control (_step_owns_control),
+        ignores calls from anywhere except the step runner itself
+        (_from_step=True) -- otherwise another connected client's stray
+        heartbeat can zero out the step's command between sends. See
+        _step_owns_control's definition for how this was found."""
+        if self._step_owns_control and not _from_step:
+            return
         with self._lock:
             self._control = {'x': _clamp(x), 'y': _clamp(y), 'r': _clamp(r)}
             self._control_updated_at = time.time()
@@ -853,11 +870,14 @@ class HardwareManager:
             post_duration=post_duration,
         )
         runner = StepRunner(self)
+        self._step_owns_control = True
         try:
             return runner.run(step, run_name=name)
         except StepAborted:
             self._last_step_summary = getattr(runner, 'last_summary', None)
             raise
+        finally:
+            self._step_owns_control = False
 
     def start_step_async(self, axis, amplitude, pre_duration=2.0,
                          step_duration=5.0, post_duration=3.0, name=None) -> dict:
