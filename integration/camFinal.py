@@ -26,11 +26,20 @@ Three ways to run this file:
 
 import argparse
 import math
+import os
 import subprocess
+import sys
 import time
 import cv2
 import numpy as np
 from picamera2 import Picamera2
+
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+_CAMERA_DIR = os.path.abspath(os.path.join(_THIS_DIR, '..', 'camera'))
+if _CAMERA_DIR not in sys.path:
+    sys.path.insert(0, _CAMERA_DIR)
+
+from underwater_pipeline import apply_pipeline  # noqa: E402
 
 # The camera's physical mount produces an image flipped relative to what
 # the rest of the pipeline (and the mounting calibration in
@@ -109,30 +118,31 @@ def marker_yaw_from_rvec(rvec):
     return float(np.arctan2(rmat[1, 0], rmat[0, 0]))
 
 
-def enhance_low_light(frame_rgb):
-    """Boost local contrast (CLAHE) and lightly denoise a frame, to help
-    ArUco detection in dim/hazy/underwater conditions where the marker
-    has low contrast against its surroundings. Ported from the
-    underwater-tuned cam12cm.py. Returns a grayscale, enhanced frame
-    suitable for detectMarkers() -- does not modify the original frame,
-    which is still needed in color for the operator video feed/overlay.
+# Dehaze/white-balance/CLAHE/gamma defaults below match the settings the
+# camera/camtestv6.py 9-condition turbidity x lighting test plan validated
+# (dehaze ON, software white balance OFF -- sensor AWB handles it, CLAHE
+# clip 3.0). See camera/underwater_pipeline.py for the pipeline itself.
+def enhance_low_light(frame_bgr, dehaze_enabled=True, wb_enabled=False,
+                       clahe_clip=3.0, gamma=1.0):
+    """Runs the shared underwater enhancement pipeline (dehaze -> white
+    balance -> grayscale -> CLAHE -> gamma -> denoise) to help ArUco
+    detection in dim/hazy/underwater conditions where the marker has low
+    contrast against its surroundings. Returns a grayscale, enhanced
+    frame suitable for detectMarkers() -- does not modify the original
+    frame, which is still needed in color for the operator video
+    feed/overlay. frame_bgr must be BGR-ordered (picamera2's "RGB888"
+    format delivers BGR bytes despite the name -- see
+    capture_and_detect() below).
     """
-    # frame_rgb is actually BGR-ordered -- picamera2's "RGB888" format
-    # delivers BGR bytes despite the name (see capture_and_detect() below).
-    gray = cv2.cvtColor(frame_rgb, cv2.COLOR_BGR2GRAY)
-
-    # CLAHE: contrast-limited adaptive histogram equalization. Unlike a
-    # global histogram equalization, this adapts per local region, so it
-    # boosts contrast in dim areas without blowing out already-bright ones.
-    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-    enhanced = clahe.apply(gray)
-
-    # Mild bilateral denoise: reduces sensor noise (common at high gain in
-    # low light) while preserving sharp edges -- important because ArUco
-    # detection depends on clean black/white edge transitions.
-    denoised = cv2.bilateralFilter(enhanced, d=5, sigmaColor=50, sigmaSpace=50)
-
-    return denoised
+    return apply_pipeline(
+        frame_bgr,
+        dehaze_enabled=dehaze_enabled,
+        wb_enabled=wb_enabled,
+        clahe_enabled=True,
+        clahe_clip=clahe_clip,
+        gamma=gamma,
+        denoise_enabled=True,
+    )
 
 
 class ArucoDetector:
@@ -143,12 +153,26 @@ class ArucoDetector:
     def __init__(self, dict_name="DICT_4X4_50", width=640, height=480,
                  hfov_deg=100.0, vfov_deg=72.0, marker_size=0.10,
                  z_correction=1.6, exposure_us=20000, gain=4.0,
-                 calib_path=None, enhance_low_light=True):
+                 calib_path=None, enhance_low_light=True,
+                 dehaze=True, white_balance=False, gamma=1.0, clahe_clip=3.0,
+                 target_id=0, id_filter=True):
         self.width = width
         self.height = height
         self.marker_size = marker_size
         self.z_correction = z_correction
         self.enhance_low_light_enabled = enhance_low_light
+        self.dehaze_enabled = dehaze
+        self.white_balance_enabled = white_balance
+        self.gamma = gamma
+        self.clahe_clip = clahe_clip
+
+        # Target-ID lock: matches the convention validated across the
+        # camera/camtestv5.py+ tuning scripts (single physical marker,
+        # id0 4x4_50 50mm). When id_filter is on, a stray second marker
+        # in frame is drawn for operator visibility but never reported
+        # as the tracked pose -- avoids silently locking onto the wrong tag.
+        self.target_id = target_id
+        self.id_filter = id_filter
 
         self.aruco_dict = cv2.aruco.Dictionary_get(ARUCO_DICTS[dict_name]) \
             if hasattr(cv2.aruco, 'Dictionary_get') \
@@ -249,7 +273,11 @@ class ArucoDetector:
         if MIRROR_FRAME_VERTICAL:
             frame = cv2.flip(frame, 0)
         if self.enhance_low_light_enabled:
-            detect_input = enhance_low_light(frame)
+            detect_input = enhance_low_light(
+                frame, dehaze_enabled=self.dehaze_enabled,
+                wb_enabled=self.white_balance_enabled,
+                clahe_clip=self.clahe_clip, gamma=self.gamma,
+            )
         else:
             # Pass grayscale directly -- detectMarkers converts internally
             # anyway, but a single-channel image skips ~2ms of color
@@ -267,20 +295,32 @@ class ArucoDetector:
         if ids is None:
             return None, bgr
 
+        # draws every marker seen (including a non-target stray tag) so it's
+        # visible to the operator even when it's not being tracked
         cv2.aruco.drawDetectedMarkers(frame, corners, ids)
+
+        ids_flat = ids.flatten()
+        if self.id_filter:
+            matches = np.flatnonzero(ids_flat == self.target_id)
+            if matches.size == 0:
+                return None, bgr
+            target_idx = int(matches[0])
+        else:
+            target_idx = 0
+
         rvecs, tvecs, _ = cv2.aruco.estimatePoseSingleMarkers(
             corners, self.marker_size, self.camera_matrix, self.dist_coeffs
         )
 
-        marker_id = int(ids.flatten()[0])
-        x, y, z = tvecs[0][0]
+        marker_id = int(ids_flat[target_idx])
+        x, y, z = tvecs[target_idx][0]
         x *= self.z_correction
         y *= self.z_correction
         z *= self.z_correction
-        yaw = marker_yaw_from_rvec(rvecs[0])
+        yaw = marker_yaw_from_rvec(rvecs[target_idx])
 
         cv2.drawFrameAxes(bgr, self.camera_matrix, self.dist_coeffs,
-                           rvecs[0], tvecs[0], self.marker_size * 0.5)
+                           rvecs[target_idx], tvecs[target_idx], self.marker_size * 0.5)
 
         pose = {
             "id": marker_id,
@@ -300,6 +340,9 @@ def _run_preview(args):
         marker_size=args.marker_size, z_correction=args.z_correction,
         exposure_us=args.exposure_us, gain=args.gain, calib_path=args.calib,
         enhance_low_light=not args.no_enhance_low_light,
+        dehaze=not args.no_dehaze, white_balance=args.white_balance,
+        gamma=args.gamma, clahe_clip=args.clahe_clip,
+        target_id=args.target_id, id_filter=not args.no_id_filter,
     )
     detector.start()
     print(f"Camera started ({args.width}x{args.height}), dictionary: {args.dict}")
@@ -355,6 +398,9 @@ def _run_calibration_check(args):
         marker_size=args.marker_size, z_correction=args.z_correction,
         exposure_us=args.exposure_us, gain=args.gain, calib_path=args.calib,
         enhance_low_light=not args.no_enhance_low_light,
+        dehaze=not args.no_dehaze, white_balance=args.white_balance,
+        gamma=args.gamma, clahe_clip=args.clahe_clip,
+        target_id=args.target_id, id_filter=not args.no_id_filter,
     )
     detector.start()
     print("Mounting calibration check -- move the marker to a known")
@@ -438,8 +484,35 @@ if __name__ == "__main__":
                          help="Manual analogue gain (default: 4.0, moderate "
                               "boost for underwater daytime light)")
     parser.add_argument("--no-enhance-low-light", action="store_true",
-                         help="Disable CLAHE contrast enhancement + denoising "
-                              "(enabled by default for underwater use)")
+                         help="Disable the whole enhancement pipeline (dehaze/"
+                              "white-balance/CLAHE/gamma/denoise) -- enabled "
+                              "by default for underwater use")
+    parser.add_argument("--no-dehaze", action="store_true",
+                         help="Disable underwater dark-channel-prior dehaze "
+                              "(enabled by default, per the camtestv6.py "
+                              "9-condition test plan's validated settings). "
+                              "Has no effect if --no-enhance-low-light is set.")
+    parser.add_argument("--white-balance", action="store_true",
+                         help="Enable software gray-world white balance on top "
+                              "of the sensor's own AWB (default: off, matching "
+                              "camtestv6.py's default -- sensor AWB alone was "
+                              "sufficient in testing)")
+    parser.add_argument("--gamma", type=float, default=1.0,
+                         help="Brightness gamma applied after CLAHE "
+                              "(default: 1.0 = no-op)")
+    parser.add_argument("--clahe-clip", type=float, default=3.0,
+                         help="CLAHE clipLimit -- higher = more contrast boost, "
+                              "but amplifies noise/turbidity graininess too "
+                              "(default: 3.0)")
+    parser.add_argument("--target-id", type=int, default=0,
+                         help="Only this marker ID counts as the tracked pose "
+                              "when --id-filter is on (default: 0, matching "
+                              "the team's id0 4x4_50 50mm marker)")
+    parser.add_argument("--no-id-filter", action="store_true",
+                         help="Track whichever marker is seen first instead of "
+                              "requiring --target-id -- a stray second marker "
+                              "in frame could get tracked instead of the real "
+                              "one. id-filter is ON by default.")
     parser.add_argument("--calibration-check", action="store_true",
                          help="Run the live camera-to-body mounting check "
                               "instead of the preview window")

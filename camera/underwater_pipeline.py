@@ -12,6 +12,13 @@ combination produced which detection result. Keeping these functions in
 one shared module -- instead of copy-pasted into every camera script --
 means a parameter fix only has to happen in one place.
 
+CHANNEL ORDER: every frame here is BGR, matching what picamera2's
+"RGB888" format actually delivers (the format name is a misnomer -- see
+integration/camFinal.py's capture_and_detect()). Functions and params
+are named frame_bgr accordingly; do not feed this a true-RGB frame
+without converting first, or the red-exclusion logic below picks the
+wrong channel.
+
 WHY THIS ORDER:
   Dehazing needs the image's original (un-equalized) contrast/color
   relationships to correctly estimate atmospheric light and transmission.
@@ -31,7 +38,8 @@ UNDERWATER-SPECIFIC ADAPTATION (why this isn't stock dark-channel-prior):
   uniformly dark regardless of whether a given patch is hazy or not.
   Left in, this biases the atmospheric-light estimate. Following the
   "Underwater DCP" approach (Drews et al.), the dark channel here is
-  computed from G,B only; the recovered image is still full RGB.
+  computed from G,B only (i.e. BGR channels 0 and 1); the recovered
+  image is still full BGR.
 """
 
 import cv2
@@ -42,32 +50,32 @@ import numpy as np
 # Stage 1: Dehazing (underwater-adapted dark-channel prior)
 # ---------------------------------------------------------------------------
 
-def _dark_channel_gb(frame_rgb, patch_size):
+def _dark_channel_gb(frame_bgr, patch_size):
     """
     Minimum across G,B only (see module docstring for why R is excluded
-    underwater), then minimum-filtered over a patch_size x patch_size
-    window. cv2.erode with a square kernel IS a patch-wise minimum
-    filter, and is hardware-accelerated -- much faster than a manual
-    sliding-window loop in Python.
+    underwater) -- BGR channels 0,1 -- then minimum-filtered over a
+    patch_size x patch_size window. cv2.erode with a square kernel IS a
+    patch-wise minimum filter, and is hardware-accelerated -- much
+    faster than a manual sliding-window loop in Python.
     """
-    min_gb = np.minimum(frame_rgb[:, :, 1], frame_rgb[:, :, 2])
+    min_gb = np.minimum(frame_bgr[:, :, 0], frame_bgr[:, :, 1])
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (patch_size, patch_size))
     return cv2.erode(min_gb, kernel)
 
 
-def _atmospheric_light(frame_rgb, dark_channel, top_fraction=0.001):
+def _atmospheric_light(frame_bgr, dark_channel, top_fraction=0.001):
     """
     Estimate atmospheric light A (the color of the haze/backscatter
-    itself) as the mean RGB of the brightest `top_fraction` of pixels in
+    itself) as the mean BGR of the brightest `top_fraction` of pixels in
     the dark channel -- these are the pixels most likely to be pure haze
     rather than scene detail.
     """
     h, w = dark_channel.shape
     n_pixels = max(int(h * w * top_fraction), 1)
     flat_dark = dark_channel.reshape(-1)
-    flat_rgb = frame_rgb.reshape(-1, 3).astype(np.float32)
+    flat_bgr = frame_bgr.reshape(-1, 3).astype(np.float32)
     brightest_idx = np.argpartition(flat_dark, -n_pixels)[-n_pixels:]
-    return flat_rgb[brightest_idx].mean(axis=0)
+    return flat_bgr[brightest_idx].mean(axis=0)
 
 
 def _guided_filter(guide_gray, src, radius=20, eps=1e-3):
@@ -98,9 +106,9 @@ def _guided_filter(guide_gray, src, radius=20, eps=1e-3):
     return mean_a * guide + mean_b
 
 
-def dehaze(frame_rgb, omega=0.85, t0=0.15, patch_size=15, downscale=4):
+def dehaze(frame_bgr, omega=0.85, t0=0.15, patch_size=15, downscale=4):
     """
-    Underwater-adapted dark-channel-prior dehaze. Returns a dehazed RGB
+    Underwater-adapted dark-channel-prior dehaze. Returns a dehazed BGR
     frame at the same size as the input.
 
     omega: haze-removal strength, 0-1. Underwater backscatter is usually
@@ -118,9 +126,9 @@ def dehaze(frame_rgb, omega=0.85, t0=0.15, patch_size=15, downscale=4):
         correctly. Only the final recovery formula runs at full res.
         Raise this if dehaze is too slow on the Pi 4.
     """
-    h, w = frame_rgb.shape[:2]
+    h, w = frame_bgr.shape[:2]
     small_w, small_h = max(w // downscale, 8), max(h // downscale, 8)
-    small = cv2.resize(frame_rgb, (small_w, small_h), interpolation=cv2.INTER_AREA)
+    small = cv2.resize(frame_bgr, (small_w, small_h), interpolation=cv2.INTER_AREA)
 
     dark = _dark_channel_gb(small, patch_size)
     A = _atmospheric_light(small, dark)
@@ -129,14 +137,14 @@ def dehaze(frame_rgb, omega=0.85, t0=0.15, patch_size=15, downscale=4):
     norm = small.astype(np.float32) / A_safe
     t_coarse = 1.0 - omega * _dark_channel_gb(norm, patch_size)
 
-    small_gray = cv2.cvtColor(small, cv2.COLOR_RGB2GRAY)
+    small_gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
     t_refined = _guided_filter(small_gray, t_coarse, radius=max(patch_size, 8))
     t_refined = np.clip(t_refined, t0, 1.0)
 
     t_full = cv2.resize(t_refined, (w, h), interpolation=cv2.INTER_LINEAR)
     t_full = np.clip(t_full, t0, 1.0)[:, :, np.newaxis]
 
-    recovered = (frame_rgb.astype(np.float32) - A_safe) / t_full + A_safe
+    recovered = (frame_bgr.astype(np.float32) - A_safe) / t_full + A_safe
     return np.clip(recovered, 0, 255).astype(np.uint8)
 
 
@@ -144,7 +152,7 @@ def dehaze(frame_rgb, omega=0.85, t0=0.15, patch_size=15, downscale=4):
 # Stage 2: White balance (software gray-world, on top of locking sensor AWB)
 # ---------------------------------------------------------------------------
 
-def gray_world_white_balance(frame_rgb):
+def gray_world_white_balance(frame_bgr):
     """
     Gray-world color-constancy: assumes the average color of a normal
     scene is neutral gray, so any consistent per-channel bias in the
@@ -154,19 +162,19 @@ def gray_world_white_balance(frame_rgb):
     Cheap, and -- unlike a single fixed manual sensor gain -- adapts as
     the cast's direction changes with depth/turbidity through a dive.
     """
-    frame_f = frame_rgb.astype(np.float32)
-    mean_r = frame_f[:, :, 0].mean()
+    frame_f = frame_bgr.astype(np.float32)
+    mean_b = frame_f[:, :, 0].mean()
     mean_g = frame_f[:, :, 1].mean()
-    mean_b = frame_f[:, :, 2].mean()
+    mean_r = frame_f[:, :, 2].mean()
     mean_gray = (mean_r + mean_g + mean_b) / 3.0
 
-    scale_r = mean_gray / max(mean_r, 1e-3)
-    scale_g = mean_gray / max(mean_g, 1e-3)
     scale_b = mean_gray / max(mean_b, 1e-3)
+    scale_g = mean_gray / max(mean_g, 1e-3)
+    scale_r = mean_gray / max(mean_r, 1e-3)
 
-    frame_f[:, :, 0] *= scale_r
+    frame_f[:, :, 0] *= scale_b
     frame_f[:, :, 1] *= scale_g
-    frame_f[:, :, 2] *= scale_b
+    frame_f[:, :, 2] *= scale_r
 
     return np.clip(frame_f, 0, 255).astype(np.uint8)
 
@@ -216,16 +224,17 @@ def denoise(gray, d=5, sigma_color=50, sigma_space=50):
 # Full pipeline
 # ---------------------------------------------------------------------------
 
-def apply_pipeline(frame_rgb, dehaze_enabled=False, wb_enabled=False,
+def apply_pipeline(frame_bgr, dehaze_enabled=False, wb_enabled=False,
                     clahe_enabled=True, clahe_clip=3.0, gamma=1.0,
                     denoise_enabled=True, dehaze_omega=0.85, dehaze_t0=0.15,
                     dehaze_downscale=4):
     """
     Runs dehaze -> white balance -> grayscale -> CLAHE -> gamma -> denoise,
     with each stage independently toggleable. Returns a single-channel
-    (grayscale) frame ready for cv2.aruco.detectMarkers().
+    (grayscale) frame ready for cv2.aruco.detectMarkers(). frame_bgr must
+    be BGR-ordered (what picamera2's "RGB888" format actually delivers).
     """
-    stage = frame_rgb
+    stage = frame_bgr
 
     if dehaze_enabled:
         stage = dehaze(stage, omega=dehaze_omega, t0=dehaze_t0, downscale=dehaze_downscale)
@@ -233,7 +242,7 @@ def apply_pipeline(frame_rgb, dehaze_enabled=False, wb_enabled=False,
     if wb_enabled:
         stage = gray_world_white_balance(stage)
 
-    gray = cv2.cvtColor(stage, cv2.COLOR_RGB2GRAY)
+    gray = cv2.cvtColor(stage, cv2.COLOR_BGR2GRAY)
 
     if clahe_enabled:
         gray = clahe_enhance(gray, clip_limit=clahe_clip)
