@@ -117,7 +117,9 @@ def enhance_low_light(frame_rgb):
     suitable for detectMarkers() -- does not modify the original frame,
     which is still needed in color for the operator video feed/overlay.
     """
-    gray = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2GRAY)
+    # frame_rgb is actually BGR-ordered -- picamera2's "RGB888" format
+    # delivers BGR bytes despite the name (see capture_and_detect() below).
+    gray = cv2.cvtColor(frame_rgb, cv2.COLOR_BGR2GRAY)
 
     # CLAHE: contrast-limited adaptive histogram equalization. Unlike a
     # global histogram equalization, this adapts per local region, so it
@@ -238,7 +240,12 @@ class ArucoDetector:
         a live preview window can keep showing video while you position
         the marker. get_pose() is a thin wrapper around this for callers
         that only care about the pose."""
-        frame = self.picam2.capture_array()  # RGB888 (kept for display overlay)
+        # picamera2's "RGB888" format string is a misnomer -- it actually
+        # delivers BGR-ordered bytes, so `frame` is already what cv2
+        # display/encode calls want. No RGB2BGR conversion needed (an
+        # earlier version did one here, which inverted red/blue on the
+        # live feed since the data was already BGR-ordered).
+        frame = self.picam2.capture_array()
         if MIRROR_FRAME_VERTICAL:
             frame = cv2.flip(frame, 0)
         if self.enhance_low_light_enabled:
@@ -247,7 +254,7 @@ class ArucoDetector:
             # Pass grayscale directly -- detectMarkers converts internally
             # anyway, but a single-channel image skips ~2ms of color
             # conversion per frame in the detection pipeline.
-            detect_input = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
+            detect_input = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         if self._new_aruco_api:
             corners, ids, _ = self._detector_obj.detectMarkers(detect_input)
         else:
@@ -255,7 +262,7 @@ class ArucoDetector:
                 detect_input, self.aruco_dict, parameters=self.aruco_params
             )
 
-        bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+        bgr = frame
 
         if ids is None:
             return None, bgr

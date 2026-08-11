@@ -279,9 +279,11 @@ def main():
                     last_print_time = now
 
             if not args.no_preview:
-                # Picamera2 gives RGB; OpenCV's imshow expects BGR for correct colors
-                bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-                cv2.imshow(window_name, bgr)
+                # frame is already [B,G,R] order -- picamera2's "RGB888" format
+                # actually delivers BGR-ordered bytes despite the name, so it's
+                # already what cv2.imshow wants. An extra cv2.cvtColor(...,
+                # COLOR_RGB2BGR) here inverted red/blue in the preview window.
+                cv2.imshow(window_name, frame)
                 if cv2.waitKey(1) & 0xFF == ord("q"):
                     break
 
