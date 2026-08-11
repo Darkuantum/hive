@@ -586,7 +586,14 @@ class HardwareManager:
             # offset adds a constant error big enough to clip the PID
             # before the real orientation error is even factored in).
             if yaw_debug is not None:
-                yaw_debug['yaw_saturated'] = abs(r) >= 0.999
+                # bool(...): r flows from camera_to_body_yaw()'s np.radians()
+                # call, so it's a numpy.float64 all the way through -- the
+                # raw comparison below produces numpy.bool_, which crashes
+                # jsonify() ("Object of type bool is not JSON serializable")
+                # the first time the engine reaches an actively-controlling
+                # auto state. Confirmed live: /api/state 500'd after the
+                # first fully-completed closed-loop step.
+                yaw_debug['yaw_saturated'] = bool(abs(r) >= 0.999)
         else:
             # Marker lost: apply velocity damper if configured
             if self._damper_x is not None and self._damper_y is not None:
