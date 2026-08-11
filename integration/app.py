@@ -153,6 +153,11 @@ def main():
     parser.add_argument('--no-camera', action='store_true',
                          help="Skip camera startup (e.g. bench-testing off-Pi; "
                               "auto mode will have nothing to react to without it)")
+    parser.add_argument('--camera-dict', default=None,
+                         help="Override the ArUco dictionary ArucoDetector uses "
+                              "(e.g. DICT_5X5_50, DICT_6X6_50 -- see camFinal.py's "
+                              "ARUCO_DICTS for the full list). Default: whatever "
+                              "camFinal.py's ArucoDetector defaults to.")
     parser.add_argument('--no-external', action='store_true',
                          help="Skip the external leak sensor thread "
                               "(e.g. testing off-Pi, or before that hardware "
@@ -180,10 +185,13 @@ def main():
         if arg_val is not None:
             pose_kw[key] = arg_val
 
+    camera_kw = {'dict_name': args.camera_dict} if args.camera_dict else None
+
     manager = HardwareManager(
         mavlink_conn=args.mavlink_conn,
         mavlink_baud=args.mavlink_baud,
         enable_camera=not args.no_camera,
+        camera_kwargs=camera_kw,
         enable_external=not args.no_external,
         enable_led=not args.no_led,
         num_leds=args.num_leds,
