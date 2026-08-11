@@ -153,7 +153,7 @@ class ArucoDetector:
     def __init__(self, dict_name="DICT_4X4_50", width=640, height=480,
                  hfov_deg=100.0, vfov_deg=72.0, marker_size=0.10,
                  x_correction=0.95, y_correction=0.9, z_correction=1.8,
-                 exposure_us=20000, gain=4.0,
+                 exposure_us=20000, gain=4.0, auto_exposure=False,
                  calib_path=None, enhance_low_light=True,
                  dehaze=True, white_balance=False, gamma=1.0, clahe_clip=3.0,
                  target_id=0, id_filter=True):
@@ -230,6 +230,13 @@ class ArucoDetector:
 
         self.exposure_us = exposure_us
         self.gain = gain
+        # exposure_us/gain above are tuned for dim underwater light -- on a
+        # bright bench-test scene (e.g. indoor daylight, Lux in the tens of
+        # thousands) they wildly overexpose and the feed reads back as solid
+        # white. auto_exposure=True skips the manual override below and lets
+        # the sensor's own auto-exposure/gain run instead -- use it for
+        # in-air testing; leave it off (default) for real underwater runs.
+        self.auto_exposure = auto_exposure
         self.picam2 = None
 
     def start(self):
@@ -241,15 +248,17 @@ class ArucoDetector:
         self.picam2.start()
         time.sleep(1)  # let auto-exposure/focus settle before overriding
 
-        self.picam2.set_controls({
-            "ExposureTime": self.exposure_us,
-            "AnalogueGain": self.gain,
+        controls = {
             # Disable the IPA software denoise stage (SDN) that runs on
             # the CPU on Pi 4 -- it adds per-frame latency. Both Pi 4 and
             # Pi 5 have hardware ISP denoise; this only disables the extra
             # software post-processing stage.
             "NoiseReductionMode": 0,
-        })
+        }
+        if not self.auto_exposure:
+            controls["ExposureTime"] = self.exposure_us
+            controls["AnalogueGain"] = self.gain
+        self.picam2.set_controls(controls)
 
     def stop(self):
         if self.picam2:
@@ -350,7 +359,8 @@ def _run_preview(args):
         dict_name=args.dict, width=args.width, height=args.height,
         marker_size=args.marker_size, x_correction=args.x_correction,
         y_correction=args.y_correction, z_correction=args.z_correction,
-        exposure_us=args.exposure_us, gain=args.gain, calib_path=args.calib,
+        exposure_us=args.exposure_us, gain=args.gain,
+        auto_exposure=args.auto_exposure, calib_path=args.calib,
         enhance_low_light=not args.no_enhance_low_light,
         dehaze=not args.no_dehaze, white_balance=args.white_balance,
         gamma=args.gamma, clahe_clip=args.clahe_clip,
@@ -409,7 +419,8 @@ def _run_calibration_check(args):
         dict_name=args.dict, width=args.width, height=args.height,
         marker_size=args.marker_size, x_correction=args.x_correction,
         y_correction=args.y_correction, z_correction=args.z_correction,
-        exposure_us=args.exposure_us, gain=args.gain, calib_path=args.calib,
+        exposure_us=args.exposure_us, gain=args.gain,
+        auto_exposure=args.auto_exposure, calib_path=args.calib,
         enhance_low_light=not args.no_enhance_low_light,
         dehaze=not args.no_dehaze, white_balance=args.white_balance,
         gamma=args.gamma, clahe_clip=args.clahe_clip,
@@ -504,6 +515,12 @@ if __name__ == "__main__":
     parser.add_argument("--gain", type=float, default=4.0,
                          help="Manual analogue gain (default: 4.0, moderate "
                               "boost for underwater daytime light)")
+    parser.add_argument("--auto-exposure", action="store_true",
+                         help="Skip the manual --exposure-us/--gain override and let "
+                              "the sensor's own auto-exposure run instead. Use this "
+                              "for in-air bench testing -- the manual defaults are "
+                              "tuned for dim underwater light and badly overexpose "
+                              "(solid white feed) in a bright room/daylight.")
     parser.add_argument("--no-enhance-low-light", action="store_true",
                          help="Disable the whole enhancement pipeline (dehaze/"
                               "white-balance/CLAHE/gamma/denoise) -- enabled "
