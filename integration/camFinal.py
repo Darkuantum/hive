@@ -151,7 +151,7 @@ class ArucoDetector:
     get_pose() repeatedly (e.g. once per main-loop iteration or in a
     background thread), then stop() on shutdown."""
 
-    def __init__(self, dict_name="DICT_4X4_50", width=640, height=480,
+    def __init__(self, dict_name="DICT_6X6_50", width=640, height=480,
                  hfov_deg=100.0, vfov_deg=72.0, marker_size=0.10,
                  x_correction=0.95, y_correction=0.9, z_correction=1.8,
                  exposure_us=20000, gain=4.0, auto_exposure=True,
@@ -163,8 +163,11 @@ class ArucoDetector:
         self.height = height
         self.marker_size = marker_size
         # Per-axis empirical correction factors -- from
-        # camera/camtestv5_100mm.py's live-tuned calibration for the id0
-        # DICT_4X4_50 100mm marker (default marker_size=0.10 above matches).
+        # camera/camtestv5_100mm.py's live-tuned calibration for a 100mm
+        # marker (default marker_size=0.10 above matches). These come from
+        # the physical marker SIZE, not its dictionary/bit encoding, so they
+        # stay valid across the DICT_4X4_50 -> DICT_6X6_50 switch (see
+        # dict_name default below) as long as the print size stays 100mm.
         # camtestv6.py's 1.1/1.15/2.0 values are NOT applicable here -- that
         # script (and its 9-condition test plan) targets a 50mm marker
         # (marker_size=0.05), a different physical target with different
@@ -180,10 +183,11 @@ class ArucoDetector:
 
         # Target-ID lock: matches the convention validated across the
         # camera/camtestv5*.py tuning scripts (single physical marker,
-        # id0 4x4_50 100mm in production -- see marker_size default above).
-        # When id_filter is on, a stray second marker in frame is drawn for
-        # operator visibility but never reported as the tracked pose --
-        # avoids silently locking onto the wrong tag.
+        # id0, 100mm, DICT_6X6_50 as of the dictionary switch -- see
+        # marker_size/dict_name defaults above). When id_filter is on, a
+        # stray second marker in frame is drawn for operator visibility
+        # but never reported as the tracked pose -- avoids silently
+        # locking onto the wrong tag.
         self.target_id = target_id
         self.id_filter = id_filter
 
@@ -515,7 +519,12 @@ def _run_calibration_check(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="ArUco detection + pose on IMX708 CSI camera")
-    parser.add_argument("--dict", default="DICT_4X4_50", choices=ARUCO_DICTS.keys())
+    parser.add_argument("--dict", default="DICT_6X6_50", choices=ARUCO_DICTS.keys(),
+                         help="ArUco dictionary (default: DICT_6X6_50 -- DICT_4X4_50's "
+                              "maxCorrectionBits is only 1, i.e. at most 1 of its 16 data "
+                              "bits can be wrong before decode fails outright; a 6x6 grid "
+                              "has a much larger error budget, which real-world blur/"
+                              "backlit-contrast/noise needs)")
     # Standalone preview keeps 1280x720 for display quality on a monitor.
     # The class default (640x480) is optimized for the headless integration
     # path where detection speed matters more than preview resolution.
@@ -529,7 +538,8 @@ if __name__ == "__main__":
     parser.add_argument("--x-correction", type=float, default=0.95,
                          help="Empirical multiplier on x (default: 0.95, from "
                               "camera/camtestv5_100mm.py's live-tuned calibration "
-                              "for the id0 DICT_4X4_50 100mm marker)")
+                              "for the id0, 100mm marker -- size-dependent, not "
+                              "dictionary-dependent, see dict_name default)")
     parser.add_argument("--y-correction", type=float, default=0.9,
                          help="Empirical multiplier on y (default: 0.9, same "
                               "100mm-marker calibration as --x-correction)")
@@ -588,7 +598,7 @@ if __name__ == "__main__":
     parser.add_argument("--target-id", type=int, default=0,
                          help="Only this marker ID counts as the tracked pose "
                               "when --id-filter is on (default: 0, matching "
-                              "the team's id0 4x4_50 100mm marker)")
+                              "the team's id0, 100mm, DICT_6X6_50 marker)")
     parser.add_argument("--no-id-filter", action="store_true",
                          help="Track whichever marker is seen first instead of "
                               "requiring --target-id -- a stray second marker "
