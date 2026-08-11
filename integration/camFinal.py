@@ -153,7 +153,7 @@ class ArucoDetector:
     def __init__(self, dict_name="DICT_4X4_50", width=640, height=480,
                  hfov_deg=100.0, vfov_deg=72.0, marker_size=0.10,
                  x_correction=0.95, y_correction=0.9, z_correction=1.8,
-                 exposure_us=20000, gain=4.0, auto_exposure=False,
+                 exposure_us=20000, gain=4.0, auto_exposure=True,
                  calib_path=None, enhance_low_light=True,
                  dehaze=True, white_balance=False, gamma=1.0, clahe_clip=3.0,
                  target_id=0, id_filter=True):
@@ -233,9 +233,10 @@ class ArucoDetector:
         # exposure_us/gain above are tuned for dim underwater light -- on a
         # bright bench-test scene (e.g. indoor daylight, Lux in the tens of
         # thousands) they wildly overexpose and the feed reads back as solid
-        # white. auto_exposure=True skips the manual override below and lets
-        # the sensor's own auto-exposure/gain run instead -- use it for
-        # in-air testing; leave it off (default) for real underwater runs.
+        # white. auto_exposure defaults to True (sensor AE runs instead of
+        # the manual override below) so the app works out of the box on the
+        # bench; pass auto_exposure=False / --no-auto-exposure for real
+        # underwater runs so the tuned manual exposure/gain apply instead.
         self.auto_exposure = auto_exposure
         self.picam2 = None
 
@@ -515,12 +516,14 @@ if __name__ == "__main__":
     parser.add_argument("--gain", type=float, default=4.0,
                          help="Manual analogue gain (default: 4.0, moderate "
                               "boost for underwater daytime light)")
-    parser.add_argument("--auto-exposure", action="store_true",
-                         help="Skip the manual --exposure-us/--gain override and let "
-                              "the sensor's own auto-exposure run instead. Use this "
-                              "for in-air bench testing -- the manual defaults are "
-                              "tuned for dim underwater light and badly overexpose "
-                              "(solid white feed) in a bright room/daylight.")
+    parser.add_argument("--no-auto-exposure", dest="auto_exposure", action="store_false",
+                         help="Use the manual --exposure-us/--gain override instead of "
+                              "the sensor's own auto-exposure (default: auto-exposure "
+                              "is ON). Pass this for real underwater runs, where the "
+                              "manual values are tuned for dim light -- auto-exposure "
+                              "is the right default for in-air bench testing, where it "
+                              "would otherwise badly overexpose to a solid white feed.")
+    parser.set_defaults(auto_exposure=True)
     parser.add_argument("--no-enhance-low-light", action="store_true",
                          help="Disable the whole enhancement pipeline (dehaze/"
                               "white-balance/CLAHE/gamma/denoise) -- enabled "
