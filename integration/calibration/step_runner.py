@@ -93,7 +93,7 @@ class StepRunner:
 
         for _ in range(ticks):
             # Check abort: shutdown requested?
-            if self.hm.is_shutting_down():
+            if self.hm.is_shutting_down:
                 raise StepAborted("shutdown requested")
 
             # Check abort: operator requested abort?

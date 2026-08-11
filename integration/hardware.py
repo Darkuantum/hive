@@ -41,6 +41,7 @@ import os
 import sys
 import threading
 import time
+import traceback
 
 from pymavlink import mavutil
 from mavlink_interface import MavlinkInterface
@@ -909,6 +910,7 @@ class HardwareManager:
             self._step_error = str(exc)
             self._step_partial = self._last_step_summary
             print(f"[step] background step failed: {exc}", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
 
     def get_step_status(self) -> dict:
         """Returns current step status: idle | running | done | error."""
@@ -1028,6 +1030,7 @@ class HardwareManager:
             self._step_error = str(exc)
             self._step_partial = getattr(self, '_last_step_summary', None)
             print(f"[cl-step] background closed-loop step failed: {exc}", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
 
     # ------------------------------------------------------------------
     # velocity damper: accel bias calibration
