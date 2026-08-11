@@ -152,13 +152,23 @@ class ArucoDetector:
 
     def __init__(self, dict_name="DICT_4X4_50", width=640, height=480,
                  hfov_deg=100.0, vfov_deg=72.0, marker_size=0.10,
-                 z_correction=1.6, exposure_us=20000, gain=4.0,
+                 x_correction=0.95, y_correction=0.9, z_correction=1.8,
+                 exposure_us=20000, gain=4.0,
                  calib_path=None, enhance_low_light=True,
                  dehaze=True, white_balance=False, gamma=1.0, clahe_clip=3.0,
                  target_id=0, id_filter=True):
         self.width = width
         self.height = height
         self.marker_size = marker_size
+        # Per-axis empirical correction factors -- from
+        # camera/camtestv5_100mm.py's live-tuned calibration for the id0
+        # DICT_4X4_50 100mm marker (default marker_size=0.10 above matches).
+        # camtestv6.py's 1.1/1.15/2.0 values are NOT applicable here -- that
+        # script (and its 9-condition test plan) targets a 50mm marker
+        # (marker_size=0.05), a different physical target with different
+        # optics/distance error characteristics.
+        self.x_correction = x_correction
+        self.y_correction = y_correction
         self.z_correction = z_correction
         self.enhance_low_light_enabled = enhance_low_light
         self.dehaze_enabled = dehaze
@@ -167,10 +177,11 @@ class ArucoDetector:
         self.clahe_clip = clahe_clip
 
         # Target-ID lock: matches the convention validated across the
-        # camera/camtestv5.py+ tuning scripts (single physical marker,
-        # id0 4x4_50 50mm). When id_filter is on, a stray second marker
-        # in frame is drawn for operator visibility but never reported
-        # as the tracked pose -- avoids silently locking onto the wrong tag.
+        # camera/camtestv5*.py tuning scripts (single physical marker,
+        # id0 4x4_50 100mm in production -- see marker_size default above).
+        # When id_filter is on, a stray second marker in frame is drawn for
+        # operator visibility but never reported as the tracked pose --
+        # avoids silently locking onto the wrong tag.
         self.target_id = target_id
         self.id_filter = id_filter
 
@@ -314,8 +325,8 @@ class ArucoDetector:
 
         marker_id = int(ids_flat[target_idx])
         x, y, z = tvecs[target_idx][0]
-        x *= self.z_correction
-        y *= self.z_correction
+        x *= self.x_correction
+        y *= self.y_correction
         z *= self.z_correction
         yaw = marker_yaw_from_rvec(rvecs[target_idx])
 
@@ -337,7 +348,8 @@ def _run_preview(args):
     Pass --no-preview to skip the window and run headless (prints only)."""
     detector = ArucoDetector(
         dict_name=args.dict, width=args.width, height=args.height,
-        marker_size=args.marker_size, z_correction=args.z_correction,
+        marker_size=args.marker_size, x_correction=args.x_correction,
+        y_correction=args.y_correction, z_correction=args.z_correction,
         exposure_us=args.exposure_us, gain=args.gain, calib_path=args.calib,
         enhance_low_light=not args.no_enhance_low_light,
         dehaze=not args.no_dehaze, white_balance=args.white_balance,
@@ -395,7 +407,8 @@ def _run_calibration_check(args):
 
     detector = ArucoDetector(
         dict_name=args.dict, width=args.width, height=args.height,
-        marker_size=args.marker_size, z_correction=args.z_correction,
+        marker_size=args.marker_size, x_correction=args.x_correction,
+        y_correction=args.y_correction, z_correction=args.z_correction,
         exposure_us=args.exposure_us, gain=args.gain, calib_path=args.calib,
         enhance_low_light=not args.no_enhance_low_light,
         dehaze=not args.no_dehaze, white_balance=args.white_balance,
@@ -475,8 +488,16 @@ if __name__ == "__main__":
     parser.add_argument("--marker-size", type=float, default=0.10,
                          help="Marker BLACK SQUARE side length in meters "
                               "(default: 0.10, matching the team's label spec)")
-    parser.add_argument("--z-correction", type=float, default=1.6,
-                         help="Empirical multiplier on x,y,z (default: 1.6)")
+    parser.add_argument("--x-correction", type=float, default=0.95,
+                         help="Empirical multiplier on x (default: 0.95, from "
+                              "camera/camtestv5_100mm.py's live-tuned calibration "
+                              "for the id0 DICT_4X4_50 100mm marker)")
+    parser.add_argument("--y-correction", type=float, default=0.9,
+                         help="Empirical multiplier on y (default: 0.9, same "
+                              "100mm-marker calibration as --x-correction)")
+    parser.add_argument("--z-correction", type=float, default=1.8,
+                         help="Empirical multiplier on z (default: 1.8, same "
+                              "100mm-marker calibration as --x-correction)")
     parser.add_argument("--exposure-us", type=int, default=20000,
                          help="Manual exposure time in microseconds "
                               "(default: 20000, a moderate underwater starting point)")
@@ -507,7 +528,7 @@ if __name__ == "__main__":
     parser.add_argument("--target-id", type=int, default=0,
                          help="Only this marker ID counts as the tracked pose "
                               "when --id-filter is on (default: 0, matching "
-                              "the team's id0 4x4_50 50mm marker)")
+                              "the team's id0 4x4_50 100mm marker)")
     parser.add_argument("--no-id-filter", action="store_true",
                          help="Track whichever marker is seen first instead of "
                               "requiring --target-id -- a stray second marker "
