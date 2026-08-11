@@ -110,6 +110,50 @@ def approximate_camera_matrix(capture_width, capture_height, hfov_deg=100.0, vfo
     return camera_matrix, dist_coeffs
 
 
+def _fallback_identify_candidate(gray, candidate_corners, aruco_dict):
+    """Second-pass decode for a candidate quad cv2.aruco itself rejected.
+
+    Found empirically debugging pool-side detection: cv2.aruco's own
+    internal per-cell bit sampling can reject a candidate (no ids, but a
+    same-sized quad shows up in the `rejected` list) even when the
+    candidate's geometry is exactly right -- its sampling is more
+    sensitive to the residual blur/noise real captures have than a
+    plain coarse-average-per-cell read is. Warping the SAME corners
+    cv2 already found and reading each cell as a trimmed mean (instead
+    of cv2's stricter per-cell sampling) recovered a clean, consistent
+    id=0 decode across every frame in that test where cv2's own decode
+    kept failing. Returns (marker_id, corners_reordered_to_rotation) or
+    None if this candidate doesn't decode to any dictionary entry.
+    """
+    n = aruco_dict.markerSize + 2  # + 2 for the black border ring
+    src = candidate_corners.reshape(-1, 2).astype(np.float32)
+    cell_px = 8
+    warp_size = n * cell_px
+    dst = np.array([[0, 0], [warp_size, 0], [warp_size, warp_size], [0, warp_size]],
+                    dtype=np.float32)
+    matrix = cv2.getPerspectiveTransform(src, dst)
+    warped = cv2.warpPerspective(gray, matrix, (warp_size, warp_size))
+
+    margin = max(1, cell_px // 4)
+    grid = np.zeros((n, n))
+    for r in range(n):
+        for c in range(n):
+            y0, y1 = r * cell_px + margin, (r + 1) * cell_px - margin
+            x0, x1 = c * cell_px + margin, (c + 1) * cell_px - margin
+            grid[r, c] = warped[y0:y1, x0:x1].mean()
+    thresh = (grid.max() + grid.min()) / 2
+    bits = (grid > thresh).astype(np.uint8)
+    inner_bits = bits[1:n - 1, 1:n - 1]
+
+    ok, marker_id, rotation = aruco_dict.identify(inner_bits, 1.0)
+    if not ok:
+        return None
+    # cv2 rolls the returned corner order by the detected rotation so pose
+    # estimation sees a consistent orientation -- replicate that here.
+    reordered = np.roll(src, -rotation, axis=0).reshape(1, 4, 2)
+    return int(marker_id), reordered
+
+
 def marker_yaw_from_rvec(rvec):
     """Extract yaw (rotation about the camera's z-axis) from an ArUco
     rotation vector. Duplicated here (also defined in pose_controller.py)
@@ -331,16 +375,27 @@ class ArucoDetector:
             # conversion per frame in the detection pipeline.
             detect_input = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         if self._new_aruco_api:
-            corners, ids, _ = self._detector_obj.detectMarkers(detect_input)
+            corners, ids, rejected = self._detector_obj.detectMarkers(detect_input)
         else:
-            corners, ids, _ = cv2.aruco.detectMarkers(
+            corners, ids, rejected = cv2.aruco.detectMarkers(
                 detect_input, self.aruco_dict, parameters=self.aruco_params
             )
 
         bgr = frame
 
         if ids is None:
-            return None, bgr
+            # cv2's own candidate geometry search still runs even when its
+            # bit-decode rejects everything -- try the more tolerant
+            # fallback decode on whatever it found before giving up.
+            for candidate in rejected:
+                found = _fallback_identify_candidate(detect_input, candidate, self.aruco_dict)
+                if found is not None:
+                    marker_id, fixed_corners = found
+                    corners = [fixed_corners]
+                    ids = np.array([[marker_id]])
+                    break
+            else:
+                return None, bgr
 
         # draws every marker seen (including a non-target stray tag) so it's
         # visible to the operator even when it's not being tracked
