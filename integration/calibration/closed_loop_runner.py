@@ -103,13 +103,12 @@ class ClosedLoopRunner:
                 f"(run_id={self.hm.get_active_run().get('run_id', 'unknown')})"
             )
 
-        # Reject if an async step is already running
-        with self.hm._step_lock:
-            if (self.hm._step_thread is not None
-                    and self.hm._step_thread.is_alive()):
-                raise StepAborted(
-                    "an async step is already running; abort it first"
-                )
+        # NOTE: no "is a step already running" check here -- run() executes
+        # INSIDE the async step's own thread (self.hm._step_thread), so a
+        # check for that thread's aliveness here is always true (it's
+        # checking itself, mid-execution) and would reject every single
+        # closed-loop step unconditionally. start_cl_step_async() already
+        # does the real version of this check before spawning the thread.
 
         self.hm.start_logging_run(run_name)
 
