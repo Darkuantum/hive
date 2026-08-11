@@ -154,6 +154,7 @@ class ArucoDetector:
                  hfov_deg=100.0, vfov_deg=72.0, marker_size=0.10,
                  x_correction=0.95, y_correction=0.9, z_correction=1.8,
                  exposure_us=20000, gain=4.0, auto_exposure=True,
+                 tuning_file="imx708_noir.json",
                  calib_path=None, enhance_low_light=True,
                  dehaze=True, white_balance=False, gamma=1.0, clahe_clip=3.0,
                  target_id=0, id_filter=True):
@@ -238,10 +239,21 @@ class ArucoDetector:
         # bench; pass auto_exposure=False / --no-auto-exposure for real
         # underwater runs so the tuned manual exposure/gain apply instead.
         self.auto_exposure = auto_exposure
+        # This IMX708 module has no IR-cut filter (NoIR variant), confirmed
+        # empirically: the stock "imx708.json" tuning drives ColourGains to
+        # roughly (R=2.7, B=1.6) here, producing a strong magenta/pink cast
+        # outdoors -- its AWB assumes an IR-cut filter is present and
+        # under-corrects for the extra near-IR hitting the red channel
+        # without one. "imx708_noir.json" gives balanced gains (~1.3/1.4)
+        # and correct color. Pass tuning_file=None to fall back to
+        # Picamera2's default tuning (e.g. if the module is ever swapped
+        # for a standard/IR-cut unit).
+        self.tuning_file = tuning_file
         self.picam2 = None
 
     def start(self):
-        self.picam2 = Picamera2()
+        tuning = Picamera2.load_tuning_file(self.tuning_file) if self.tuning_file else None
+        self.picam2 = Picamera2(tuning=tuning)
         config = self.picam2.create_preview_configuration(
             main={"format": "RGB888", "size": (self.width, self.height)}
         )
@@ -361,7 +373,8 @@ def _run_preview(args):
         marker_size=args.marker_size, x_correction=args.x_correction,
         y_correction=args.y_correction, z_correction=args.z_correction,
         exposure_us=args.exposure_us, gain=args.gain,
-        auto_exposure=args.auto_exposure, calib_path=args.calib,
+        auto_exposure=args.auto_exposure, tuning_file=args.tuning_file,
+        calib_path=args.calib,
         enhance_low_light=not args.no_enhance_low_light,
         dehaze=not args.no_dehaze, white_balance=args.white_balance,
         gamma=args.gamma, clahe_clip=args.clahe_clip,
@@ -421,7 +434,8 @@ def _run_calibration_check(args):
         marker_size=args.marker_size, x_correction=args.x_correction,
         y_correction=args.y_correction, z_correction=args.z_correction,
         exposure_us=args.exposure_us, gain=args.gain,
-        auto_exposure=args.auto_exposure, calib_path=args.calib,
+        auto_exposure=args.auto_exposure, tuning_file=args.tuning_file,
+        calib_path=args.calib,
         enhance_low_light=not args.no_enhance_low_light,
         dehaze=not args.no_dehaze, white_balance=args.white_balance,
         gamma=args.gamma, clahe_clip=args.clahe_clip,
@@ -524,6 +538,13 @@ if __name__ == "__main__":
                               "is the right default for in-air bench testing, where it "
                               "would otherwise badly overexpose to a solid white feed.")
     parser.set_defaults(auto_exposure=True)
+    parser.add_argument("--tuning-file", default="imx708_noir.json",
+                         help="libcamera tuning file name to load (default: "
+                              "imx708_noir.json -- this module has no IR-cut "
+                              "filter, and the stock imx708.json tuning's AWB "
+                              "badly over-reds the image outdoors as a result). "
+                              "Pass an empty string to use Picamera2's default "
+                              "tuning instead.")
     parser.add_argument("--no-enhance-low-light", action="store_true",
                          help="Disable the whole enhancement pipeline (dehaze/"
                               "white-balance/CLAHE/gamma/denoise) -- enabled "
