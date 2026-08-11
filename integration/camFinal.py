@@ -33,6 +33,7 @@ import time
 import cv2
 import numpy as np
 from picamera2 import Picamera2
+from libcamera import controls as libcamera_controls
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _CAMERA_DIR = os.path.abspath(os.path.join(_THIS_DIR, '..', 'camera'))
@@ -154,7 +155,7 @@ class ArucoDetector:
                  hfov_deg=100.0, vfov_deg=72.0, marker_size=0.10,
                  x_correction=0.95, y_correction=0.9, z_correction=1.8,
                  exposure_us=20000, gain=4.0, auto_exposure=True,
-                 tuning_file="imx708_noir.json",
+                 autofocus=True, tuning_file="imx708_noir.json",
                  calib_path=None, enhance_low_light=True,
                  dehaze=True, white_balance=False, gamma=1.0, clahe_clip=3.0,
                  target_id=0, id_filter=True):
@@ -249,6 +250,12 @@ class ArucoDetector:
         # Picamera2's default tuning (e.g. if the module is ever swapped
         # for a standard/IR-cut unit).
         self.tuning_file = tuning_file
+        # Nothing was ever driving focus -- AfMode defaults to Manual with
+        # whatever fixed LensPosition the sensor happens to power up at, so
+        # the lens never actually re-focuses on the target. autofocus=True
+        # turns on continuous AF with the full (macro-to-infinity) range so
+        # it tracks the marker as distance changes during a real approach.
+        self.autofocus = autofocus
         self.picam2 = None
 
     def start(self):
@@ -261,7 +268,7 @@ class ArucoDetector:
         self.picam2.start()
         time.sleep(1)  # let auto-exposure/focus settle before overriding
 
-        controls = {
+        camera_controls = {
             # Disable the IPA software denoise stage (SDN) that runs on
             # the CPU on Pi 4 -- it adds per-frame latency. Both Pi 4 and
             # Pi 5 have hardware ISP denoise; this only disables the extra
@@ -269,9 +276,12 @@ class ArucoDetector:
             "NoiseReductionMode": 0,
         }
         if not self.auto_exposure:
-            controls["ExposureTime"] = self.exposure_us
-            controls["AnalogueGain"] = self.gain
-        self.picam2.set_controls(controls)
+            camera_controls["ExposureTime"] = self.exposure_us
+            camera_controls["AnalogueGain"] = self.gain
+        if self.autofocus:
+            camera_controls["AfMode"] = libcamera_controls.AfModeEnum.Continuous
+            camera_controls["AfRange"] = libcamera_controls.AfRangeEnum.Full
+        self.picam2.set_controls(camera_controls)
 
     def stop(self):
         if self.picam2:
@@ -373,7 +383,8 @@ def _run_preview(args):
         marker_size=args.marker_size, x_correction=args.x_correction,
         y_correction=args.y_correction, z_correction=args.z_correction,
         exposure_us=args.exposure_us, gain=args.gain,
-        auto_exposure=args.auto_exposure, tuning_file=args.tuning_file,
+        auto_exposure=args.auto_exposure, autofocus=args.autofocus,
+        tuning_file=args.tuning_file,
         calib_path=args.calib,
         enhance_low_light=not args.no_enhance_low_light,
         dehaze=not args.no_dehaze, white_balance=args.white_balance,
@@ -434,7 +445,8 @@ def _run_calibration_check(args):
         marker_size=args.marker_size, x_correction=args.x_correction,
         y_correction=args.y_correction, z_correction=args.z_correction,
         exposure_us=args.exposure_us, gain=args.gain,
-        auto_exposure=args.auto_exposure, tuning_file=args.tuning_file,
+        auto_exposure=args.auto_exposure, autofocus=args.autofocus,
+        tuning_file=args.tuning_file,
         calib_path=args.calib,
         enhance_low_light=not args.no_enhance_low_light,
         dehaze=not args.no_dehaze, white_balance=args.white_balance,
@@ -538,6 +550,13 @@ if __name__ == "__main__":
                               "is the right default for in-air bench testing, where it "
                               "would otherwise badly overexpose to a solid white feed.")
     parser.set_defaults(auto_exposure=True)
+    parser.add_argument("--no-autofocus", dest="autofocus", action="store_false",
+                         help="Leave the lens at whatever fixed manual position it "
+                              "powers up at instead of running continuous AF (default: "
+                              "continuous AF is ON, full macro-to-infinity range). "
+                              "Nothing was ever driving focus before this flag existed, "
+                              "so the lens previously just sat wherever it defaulted to.")
+    parser.set_defaults(autofocus=True)
     parser.add_argument("--tuning-file", default="imx708_noir.json",
                          help="libcamera tuning file name to load (default: "
                               "imx708_noir.json -- this module has no IR-cut "
