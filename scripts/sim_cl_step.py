@@ -341,11 +341,11 @@ def compute_metrics(rows, setpoint):
 # ===================================================================
 
 def make_plot(out_dir, name, axis, setpoint, gains, plant_params, records):
-    """Generate 3-subplot PNG if matplotlib is available."""
+    """Generate 3 separate PNG files if matplotlib is available."""
     if not _matplotlib_ok:
         print("[INFO] matplotlib not available — skipping plot. "
               "Install it or use --no-plot.", file=sys.stderr)
-        return None
+        return []
 
     ts_all = [r["ts"] for r in records]
     motor_norms = [r["motor_norm"] for r in records]
@@ -367,53 +367,66 @@ def make_plot(out_dir, name, axis, setpoint, gains, plant_params, records):
         if r["phase"] == "step":
             step_end = r["ts"] + 0.1  # approximate; last step tick + dt
 
-    title = (f"Simulated closed-loop step — axis={axis} setpoint={setpoint} "
-             f"kp={gains['kp']:.2f} ki={gains['ki']:.2f} kd={gains['kd']:.2f} "
-             f"(K={plant_params['K']:.3f} tau={plant_params['tau']:.2f}s "
-             f"L={plant_params['L']:.2f}s)")
+    kp, ki, kd = gains["kp"], gains["ki"], gains["kd"]
+    written = []
 
-    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, sharex=True,
-                                         figsize=(10, 8),
-                                         constrained_layout=True)
-    fig.suptitle(title, fontsize=10)
-
-    # 1. Motor command
-    ax1.step(ts_all, motor_norms, where="post", linewidth=1.0)
-    ax1.axhline(0, color="grey", linewidth=0.5)
+    # --- 1. Motor command ---
+    fig, ax = plt.subplots(figsize=(10, 4), constrained_layout=True)
+    ax.step(ts_all, motor_norms, where="post", linewidth=1.0)
+    ax.axhline(0, color="grey", linewidth=0.5, linestyle="--")
     if pre_end is not None:
-        ax1.axvline(pre_end, color="grey", linestyle=":", linewidth=0.8)
+        ax.axvline(pre_end, color="grey", linestyle=":", linewidth=0.8)
     if step_end is not None:
-        ax1.axvline(step_end, color="grey", linestyle=":", linewidth=0.8)
-    ax1.set_ylabel("Motor (norm)")
-    ax1.set_ylim(-1.1, 1.1)
-
-    # 2. Position
-    ax2.plot(ts_all, measured, linewidth=1.0, label="measured")
-    ax2.plot(ts_all, setpoints, "--", linewidth=0.8, label="setpoint")
-    if pre_end is not None:
-        ax2.axvline(pre_end, color="grey", linestyle=":", linewidth=0.8)
-    if step_end is not None:
-        ax2.axvline(step_end, color="grey", linestyle=":", linewidth=0.8)
-    ax2.set_ylabel("Position")
-    ax2.legend(loc="upper right", fontsize=8)
-
-    # 3. PID terms
-    ax3.plot(ts_all, p_terms, linewidth=0.8, label="P")
-    ax3.plot(ts_all, i_terms, linewidth=0.8, label="I")
-    ax3.plot(ts_all, d_terms, linewidth=0.8, label="D")
-    ax3.plot(ts_all, outs, linewidth=1.0, label="out")
-    if pre_end is not None:
-        ax3.axvline(pre_end, color="grey", linestyle=":", linewidth=0.8)
-    if step_end is not None:
-        ax3.axvline(step_end, color="grey", linestyle=":", linewidth=0.8)
-    ax3.set_ylabel("PID terms")
-    ax3.set_xlabel("Time (s)")
-    ax3.legend(loc="upper right", fontsize=8)
-
-    png_path = os.path.join(out_dir, f"{name}_plot.png")
-    fig.savefig(png_path, dpi=150)
+        ax.axvline(step_end, color="grey", linestyle=":", linewidth=0.8)
+    ax.set_ylabel("Motor command (normalized)")
+    ax.set_xlabel("Time (s)")
+    ax.set_ylim(-1.1, 1.1)
+    ax.set_title(f"{axis} motor command — kp={kp:.2f} ki={ki:.2f} kd={kd:.2f}",
+                 fontsize=10)
+    path = os.path.join(out_dir, f"{name}_motor.png")
+    fig.savefig(path, dpi=150)
     plt.close(fig)
-    return png_path
+    written.append(path)
+
+    # --- 2. Position tracking ---
+    fig, ax = plt.subplots(figsize=(10, 4), constrained_layout=True)
+    ax.plot(ts_all, measured, linewidth=1.0, label="measured")
+    ax.plot(ts_all, setpoints, "--", linewidth=0.8, label="setpoint")
+    if pre_end is not None:
+        ax.axvline(pre_end, color="grey", linestyle=":", linewidth=0.8)
+    if step_end is not None:
+        ax.axvline(step_end, color="grey", linestyle=":", linewidth=0.8)
+    pos_label = "Position (rad)" if axis == "yaw" else "Position (m)"
+    ax.set_ylabel(pos_label)
+    ax.set_xlabel("Time (s)")
+    ax.set_title(f"{axis} position tracking — setpoint={setpoint}", fontsize=10)
+    ax.legend(loc="upper right", fontsize=8)
+    path = os.path.join(out_dir, f"{name}_position.png")
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    written.append(path)
+
+    # --- 3. PID terms ---
+    fig, ax = plt.subplots(figsize=(10, 4), constrained_layout=True)
+    ax.plot(ts_all, p_terms, linewidth=0.8, label="p")
+    ax.plot(ts_all, i_terms, linewidth=0.8, label="i")
+    ax.plot(ts_all, d_terms, linewidth=0.8, label="d")
+    ax.plot(ts_all, outs, linewidth=1.0, label="out")
+    if pre_end is not None:
+        ax.axvline(pre_end, color="grey", linestyle=":", linewidth=0.8)
+    if step_end is not None:
+        ax.axvline(step_end, color="grey", linestyle=":", linewidth=0.8)
+    ax.set_ylabel("PID term output")
+    ax.set_xlabel("Time (s)")
+    ax.set_title(f"{axis} PID terms — kp={kp:.2f} ki={ki:.2f} kd={kd:.2f}",
+                 fontsize=10)
+    ax.legend(loc="upper right", fontsize=8)
+    path = os.path.join(out_dir, f"{name}_pid.png")
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    written.append(path)
+
+    return written
 
 
 # ===================================================================
@@ -617,17 +630,17 @@ def simulate(args):
     print(f"{'='*60}\n")
 
     # --- Plot ---
-    png_path = None
+    png_paths = []
     if not args.no_plot:
-        png_path = make_plot(out_dir, args.name, stepped_axis, setpoint,
-                             gains[stepped_axis], plant_params[stepped_axis],
-                             records)
+        png_paths = make_plot(out_dir, args.name, stepped_axis, setpoint,
+                              gains[stepped_axis], plant_params[stepped_axis],
+                              records)
 
     print(f"[INFO] CSV written to: {csv_path}")
-    if png_path:
-        print(f"[INFO] PNG written to: {png_path}")
+    for p in png_paths:
+        print(f"[INFO] PNG written to: {p}")
 
-    return csv_path, png_path, metrics
+    return csv_path, png_paths, metrics
 
 
 # ===================================================================
