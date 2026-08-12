@@ -59,6 +59,22 @@ CAMERA_MOUNT_YAW_DEG = -90.0   # was +90 -- sign confirmed wrong 2026-08-12:
                                 # likely need re-checking -- left as-is for now,
                                 # see frame_thruster_debug memory.
 
+# Sway thrust induces a real, measured yaw torque -- confirmed 2026-08-12
+# via 5 pure open-loop sway steps (motor_x=motor_r=0 the whole time) read
+# against the Pixhawk's own gyro (yaw_pixhawk_rad), independent of the
+# camera/ArUco entirely, so this isn't a vision artifact:
+#   sway=+0.3 -> yaw drift +4.2deg, +6.3deg over a 5s hold
+#   sway=-0.3 -> yaw drift -2.2deg, -3.0deg, -2.2deg over a 5s hold
+# Averaging both directions (rate = drift/hold_s / 0.3 command) gives
+# ~0.045 rad/s of induced yaw rate per unit normalized sway command.
+# The +/- asymmetry (~0.061 vs ~0.029) might be real (e.g. thrust
+# direction-dependent flow effects) or might just be a tether/current
+# artifact from only 2-3 samples per direction -- not enough data to
+# trust a per-direction split yet, so this uses one symmetric gain.
+# No comparable surge->yaw coupling showed up in the same testing.
+# Needs closed-loop validation to confirm/refine -- see HANDOFF doc.
+SWAY_YAW_FF_GAIN = 0.045  # rad/s yaw-rate compensation per unit sway command
+
 
 def _rotation_matrix(roll_deg, pitch_deg, yaw_deg):
     """Standard XYZ Euler rotation matrix, in degrees."""
@@ -265,6 +281,15 @@ class PoseController:
         vy = self.pid_sway.update(error_sway, dt)
         yaw_rate = self.pid_yaw.update(error_yaw, dt)
 
+        # Feedforward: cancel the vehicle's real sway->yaw coupling (see
+        # SWAY_YAW_FF_GAIN above) by subtracting a yaw-rate term
+        # proportional to the commanded sway output, then re-clamp -- the
+        # two terms can now add up to more than either alone.
+        sway_norm = vy / self.pid_sway.output_limit
+        yaw_rate -= SWAY_YAW_FF_GAIN * sway_norm
+        yaw_rate = max(-self.pid_yaw.output_limit,
+                       min(self.pid_yaw.output_limit, yaw_rate))
+
         # Populate last_state for telemetry logging
         self.last_state = {
             "surge": {
@@ -280,7 +305,7 @@ class PoseController:
             "yaw": {
                 "setpoint": 0.0, "measured": yaw_body,
                 "p": self.pid_yaw.last_p, "i": self.pid_yaw.last_i,
-                "d": self.pid_yaw.last_d, "out": self.pid_yaw.last_output,
+                "d": self.pid_yaw.last_d, "out": yaw_rate,
             },
         }
 
