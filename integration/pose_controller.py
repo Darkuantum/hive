@@ -123,8 +123,17 @@ def camera_to_body_yaw(yaw_cam):
     """Apply the camera's mounting yaw offset to a detected marker yaw
     angle, same idea as camera_to_body() but for orientation rather
     than position -- a pure rotation only needs the yaw component of
-    the mount offset, not the full 3D rotation matrix."""
-    return float(yaw_cam + np.radians(CAMERA_MOUNT_YAW_DEG))
+    the mount offset, not the full 3D rotation matrix.
+
+    yaw_cam is negated here -- live-checked 2026-08-13: rotating the
+    marker clockwise (as seen from the camera) reads yaw_cam positive,
+    but MANUAL_CONTROL.r positive is clockwise (MAVLink spec) and the
+    control law wants the vehicle to turn the SAME way the marker did
+    (see PoseController's docstring), so a positive yaw_cam should
+    produce a positive r. Without the negation it produced negative r
+    instead -- the yaw correction was turning the vehicle away from
+    matching the marker's orientation, not toward it."""
+    return float(-yaw_cam + np.radians(CAMERA_MOUNT_YAW_DEG))
 
 
 def _wrap_pi(angle):
