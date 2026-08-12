@@ -8,3 +8,6 @@ camera/results/
 
 # calibration data/log archives (live on the Pi, not in git)
 *.zip
+
+# generated sim datasets + run telemetry (regenerated on demand, not source)
+integration/logs/
