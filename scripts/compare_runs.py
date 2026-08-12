@@ -12,6 +12,7 @@ Usage:
 """
 
 import csv
+import math
 import os
 
 # ---------------------------------------------------------------------------
@@ -34,6 +35,16 @@ LOGS_DIR = os.path.normpath(LOGS_DIR)
 SCENARIOS = ["initial", "tuned", "actual"]
 AXES = ["surge", "sway", "yaw"]
 UNIT_LABEL = {"surge": "Position (m)", "sway": "Position (m)", "yaw": "Position (rad)"}
+
+# Identified (test frame) vs extrapolated (real frame) plant params: K = velocity
+# gain at full thrust, tau = time constant. Test values from open-loop ID; real
+# values from the physics extrapolation. Used for the open-loop explanatory graph.
+PLANT_PARAMS = {  # axis -> frame -> (K, tau)
+    "surge": {"test frame": (0.054, 1.84), "real frame": (0.054, 2.20)},
+    "sway":  {"test frame": (0.079, 2.16), "real frame": (0.079, 2.58)},
+    "yaw":   {"test frame": (0.100, 2.00), "real frame": (0.019, 1.11)},
+}
+UNIT_VEL = {"surge": "Velocity (m/s)", "sway": "Velocity (m/s)", "yaw": "Yaw rate (rad/s)"}
 
 
 def load_csv(csv_path):
@@ -161,6 +172,34 @@ def plot_master(out_dir):
     return png_path
 
 
+def plot_openloop_master(out_dir):
+    """Open-loop plant step response (full thrust, no PID) — explains the
+    closed-loop rise rates. Translation test/real share the same K (same top
+    speed -> similar rise); real is slightly slower (higher tau); yaw's K
+    collapses on the real frame (authority loss)."""
+    fig, axes = plt.subplots(1, 3, figsize=(16, 5), constrained_layout=True)
+    colors = {"test frame": "tab:purple", "real frame": "tab:green"}
+    ts = [i * 0.05 for i in range(201)]  # 0..10 s
+    for idx, axis in enumerate(AXES):
+        ax = axes[idx]
+        for frame, (K, tau) in PLANT_PARAMS[axis].items():
+            vs = [K * (1.0 - math.exp(-t / tau)) for t in ts]
+            ax.plot(ts, vs, linewidth=1.6, color=colors[frame],
+                    label=f"{frame}: K={K:.3f}, \u03c4={tau:.2f}s")
+        ax.axhline(0, color="grey", linewidth=0.5)
+        ax.set_xlabel("Time (s)")
+        ax.set_ylabel(UNIT_VEL[axis])
+        ax.set_title(axis, fontsize=10)
+        ax.legend(fontsize=7, loc="lower right")
+    fig.suptitle("Open-loop plant step response (full thrust, no PID) \u2014 "
+                 "why the closed-loop rises look similar", fontsize=10, y=1.02)
+    png_path = os.path.join(out_dir, "comparison_openloop.png")
+    fig.savefig(png_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    print(f"[INFO] PNG written to: {png_path}")
+    return png_path
+
+
 def main():
     if not _matplotlib_ok:
         print("[INFO] matplotlib not available — skipping plots.", flush=True)
@@ -174,6 +213,9 @@ def main():
 
     # Master 3-subplot comparison
     plot_master(LOGS_DIR)
+
+    # Open-loop plant response (explains the closed-loop rise rates)
+    plot_openloop_master(LOGS_DIR)
 
 
 if __name__ == "__main__":
