@@ -341,7 +341,7 @@ def compute_metrics(rows, setpoint):
 # ===================================================================
 
 def make_plot(out_dir, name, axis, setpoint, gains, plant_params, records):
-    """Generate 3 separate PNG files if matplotlib is available."""
+    """Generate 3 separate PNGs + 1 combined PNG if matplotlib is available."""
     if not _matplotlib_ok:
         print("[INFO] matplotlib not available — skipping plot. "
               "Install it or use --no-plot.", file=sys.stderr)
@@ -431,7 +431,7 @@ def make_plot(out_dir, name, axis, setpoint, gains, plant_params, records):
     fig, (ax1, ax2, ax3) = plt.subplots(3, 1, sharex=True,
                                          figsize=(10, 10),
                                          constrained_layout=True)
-    title = (f"Simulated closed-loop step — axis={axis} setpoint={setpoint} "
+    title = (f"Closed-loop step — axis={axis} setpoint={setpoint} "
              f"kp={kp:.2f} ki={ki:.2f} kd={kd:.2f} "
              f"(K={plant_params['K']:.3f} tau={plant_params['tau']:.2f}s "
              f"L={plant_params['L']:.2f}s)")
