@@ -1,0 +1,7 @@
+{
+  "version": 2,
+  "_note": "surge/sway data-driven from open-loop identification (R2>=0.5, 2026-08-11). yaw unidentifiable (ArUco PnP flip) — kept at defaults pending re-collection.",
+  "surge": {"kp": 4.00, "ki": 0.54, "kd": 7.36},
+  "sway":  {"kp": 2.34, "ki": 0.27, "kd": 5.07},
+  "yaw":   {"kp": 0.8,  "ki": 0.0,  "kd": 0.1}
+}

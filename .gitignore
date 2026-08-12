@@ -5,3 +5,6 @@ __pycache__/
 
 camera/recordings/
 camera/results/
+
+# calibration data/log archives (live on the Pi, not in git)
+*.zip
