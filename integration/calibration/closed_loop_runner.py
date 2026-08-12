@@ -120,19 +120,23 @@ class ClosedLoopRunner:
             # Pre phase — zero setpoint, wait for marker lock
             dx, dy, dyaw = step.get_offset('pre')
             self.hm.set_cl_setpoint(dx, dy, dyaw)
+            self.hm.set_cl_phase('pre')
             self._wait(step.pre_duration, check_marker=True, expected_mode='auto')
 
             # Step phase — inject the setpoint offset
             dx, dy, dyaw = step.get_offset('step')
             self.hm.set_cl_setpoint(dx, dy, dyaw)
+            self.hm.set_cl_phase('step')
             self._wait(step.hold_duration, check_marker=True, expected_mode='auto')
 
             # Post phase — clear setpoint
             self.hm.clear_cl_setpoint()
+            self.hm.set_cl_phase('post')
             self._wait(step.post_duration, check_marker=False, expected_mode='auto')
 
         finally:
             self.hm.clear_cl_setpoint()
+            self.hm.set_cl_phase('')
             # Zero motors explicitly (AUTO mode would do this when not
             # controlling, but belt-and-suspenders)
             self.hm.set_control(0.0, 0.0, 0.0)

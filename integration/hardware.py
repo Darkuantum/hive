@@ -45,7 +45,7 @@ import traceback
 
 from pymavlink import mavutil
 from mavlink_interface import MavlinkInterface
-from pose_controller import PoseController, camera_to_body, camera_to_body_yaw
+from pose_controller import PoseController, camera_to_body, camera_to_body_yaw, body_to_camera
 from decision_engine import DecisionEngine
 
 CONTROL_TIMEOUT_S = 0.5    # manual mode only: zero sticks if nothing posted for this long
@@ -205,6 +205,11 @@ class HardwareManager:
         self._cl_setpoint_x = 0.0
         self._cl_setpoint_y = 0.0
         self._cl_setpoint_yaw = 0.0
+        # "" outside a closed-loop run; "pre"/"step"/"post" set by
+        # ClosedLoopRunner so metrics.py can find hold-phase boundaries
+        # directly instead of inferring them from the setpoint column
+        # (which is always 0.0 -- see set_cl_setpoint's docstring).
+        self._cl_phase = ""
 
         # ---- velocity damper (None when disabled) ----
         self._damper_x = None
@@ -482,6 +487,7 @@ class HardwareManager:
                 "aruco_visible": aruco_visible,
                 "yaw_pixhawk_rad": yaw_pixhawk if yaw_pixhawk is not None else float('nan'),
                 "yaw_aruco_rad": yaw_aruco,
+                "phase": self._cl_phase,
             }
 
             if pid_state is not None:
@@ -578,8 +584,16 @@ class HardwareManager:
             # DecisionEngine has already seen the true pose above;
             # we subtract the offset so PoseController.compute() drives
             # to the offset position instead of zero.
-            x_eff = pose['x'] - self._cl_setpoint_x
-            y_eff = pose['y'] - self._cl_setpoint_y
+            #
+            # _cl_setpoint_x/y are body-frame (surge/sway); compute() takes
+            # camera-frame pose and rotates it to body frame internally, so
+            # the offset has to be rotated into camera frame *first* or it
+            # lands on the wrong body axis under CAMERA_MOUNT_YAW_DEG != 0.
+            cl_dx_cam, cl_dy_cam, _ = body_to_camera(
+                self._cl_setpoint_x, self._cl_setpoint_y, 0.0
+            )
+            x_eff = pose['x'] - cl_dx_cam
+            y_eff = pose['y'] - cl_dy_cam
             yaw_eff = pose['yaw'] - self._cl_setpoint_yaw
             vx, vy, yaw_rate = self.controller.compute(
                 x_eff, y_eff, pose['z'], yaw_eff, dt
@@ -986,6 +1000,12 @@ class HardwareManager:
         self._cl_setpoint_x = 0.0
         self._cl_setpoint_y = 0.0
         self._cl_setpoint_yaw = 0.0
+
+    def set_cl_phase(self, phase: str):
+        """Tag subsequent telemetry rows with the current closed-loop run
+        phase ("pre"/"step"/"post"), so metrics.py can find hold-phase
+        boundaries directly instead of inferring them from position data."""
+        self._cl_phase = phase
 
     def run_closed_loop_step(self, axis: str, setpoint: float,
                             hold_duration: float = 5.0,

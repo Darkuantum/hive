@@ -26,6 +26,7 @@ TELEMETRY_COLUMNS = [
     "yaw_setpoint",   "yaw_measured",   "yaw_p",   "yaw_i",   "yaw_d",   "yaw_out",
     "motor_x", "motor_y", "motor_z", "motor_r",   # int -1000..1000
     "battery_voltage",                                   # float, sanity check
+    "phase",                # str "pre"/"step"/"post" during closed-loop runs, else ""
 ]
 
 

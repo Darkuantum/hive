@@ -56,10 +56,11 @@ def compute_metrics(csv_path: str, axis: str = 'surge',
     measured_col = f"{axis}_measured"
     setpoint_col = f"{axis}_setpoint"
 
-    # Build parallel arrays of (timestamp, measured, setpoint_value)
+    # Build parallel arrays of (timestamp, measured, setpoint_value, phase)
     ts_list = []
     pos_list = []
     sp_list = []
+    phase_list = []
 
     for row in rows:
         try:
@@ -74,32 +75,41 @@ def compute_metrics(csv_path: str, axis: str = 'surge',
         ts_list.append(ts)
         pos_list.append(pos)
         sp_list.append(sp_val)
+        phase_list.append(row.get('phase', ''))
 
     if len(ts_list) < 2:
         raise ValueError(f"Not enough data rows in {csv_path}")
 
     t0 = ts_list[0]
 
-    # --- Step onset detection ---
-    onset_idx = _detect_step_onset(ts_list, sp_list, pos_list, t0)
-
+    # --- Step onset / hold-end detection ---
+    # Preferred: the "phase" column, logged directly by ClosedLoopRunner
+    # ("pre"/"step"/"post"). Falls back to inferring boundaries from the
+    # setpoint/position columns for older CSVs that predate the phase
+    # column -- that fallback is unreliable when the setpoint column is
+    # always 0.0 (true of every closed-loop run: the offset is injected
+    # into the *measured* pose upstream of PoseController.compute(), which
+    # always logs its own internal target as 0), so prefer phase whenever
+    # it's present.
+    onset_idx, hold_end_idx = _detect_phase_bounds(phase_list)
     if onset_idx is None:
-        raise ValueError("Could not detect step onset in data")
+        onset_idx = _detect_step_onset(ts_list, sp_list, pos_list, t0)
+        if onset_idx is None:
+            raise ValueError("Could not detect step onset in data")
+        hold_end_idx = _detect_step_end(ts_list, sp_list, onset_idx)
 
     t_onset = ts_list[onset_idx]
 
     # --- Auto-detect setpoint if not provided ---
     if setpoint is None:
-        setpoint = _auto_detect_setpoint(pos_list, onset_idx)
+        setpoint = _auto_detect_setpoint(pos_list, onset_idx,
+                                         hold_end_idx or len(pos_list))
     if setpoint == 0:
         raise ValueError("Detected setpoint is zero; cannot compute tracking metrics")
 
     abs_sp = abs(setpoint)
 
     # --- Isolate hold-phase data (from onset onwards, up to post-phase) ---
-    # We need to find where the hold ends. Look for setpoint dropping back.
-    # If setpoint column is always populated, use it. Otherwise hold till end.
-    hold_end_idx = _detect_step_end(ts_list, sp_list, onset_idx)
     if hold_end_idx is None:
         hold_end_idx = len(ts_list)
 
@@ -231,10 +241,35 @@ def _detect_step_end(ts_list, sp_list, onset_idx):
     return None
 
 
-def _auto_detect_setpoint(pos_list, onset_idx):
-    """Auto-detect setpoint from the mean position during hold."""
-    # Use the middle 50% of data after onset for robustness
-    n = len(pos_list)
+def _detect_phase_bounds(phase_list):
+    """Find (onset_idx, hold_end_idx) directly from a logged "phase" column.
+
+    onset_idx is the first "step"-phase row; hold_end_idx is the first row
+    after it that's no longer "step" (typically the first "post" row).
+    Returns (None, None) if the column is absent/empty (older CSVs, or
+    manual-mode runs), so callers can fall back to heuristic detection.
+    """
+    onset_idx = None
+    hold_end_idx = None
+    for i, p in enumerate(phase_list):
+        if p == 'step':
+            if onset_idx is None:
+                onset_idx = i
+        elif onset_idx is not None:
+            hold_end_idx = i
+            break
+    return onset_idx, hold_end_idx
+
+
+def _auto_detect_setpoint(pos_list, onset_idx, hold_end_idx=None):
+    """Auto-detect setpoint from the mean position during hold.
+
+    hold_end_idx bounds the averaging window to the real hold phase when
+    known (from the phase column); without it, falls back to the middle
+    50% of onset-to-end-of-data, which risks blending in post-phase data.
+    """
+    n = hold_end_idx if hold_end_idx is not None else len(pos_list)
+    # Use the middle 50% of the hold window for robustness
     start = onset_idx + max(1, (n - onset_idx) // 4)
     end = onset_idx + max(1, 3 * (n - onset_idx) // 4)
     segment = pos_list[start:end]

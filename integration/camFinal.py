@@ -226,6 +226,22 @@ class ArucoDetector:
         self.gamma = gamma
         self.clahe_clip = clahe_clip
 
+        # Single-marker ArUco pose estimation (estimatePoseSingleMarkers)
+        # has a well-known orientation ambiguity: two near-equally-valid
+        # PnP solutions differing by ~180 deg, which can flip between
+        # frames purely from small viewing-angle changes -- not real
+        # marker/vehicle rotation. A frame-to-frame yaw jump bigger than
+        # any plausible real rotation at this frame rate is almost
+        # certainly a flip, so it's rejected and the last good yaw is
+        # reused instead of feeding a spurious ~180 deg error downstream
+        # (confirmed live 2026-08-12: manual-mode translation with no PID
+        # running still showed yaw snapping between ~+90 and ~-90 deg).
+        self._last_yaw = None
+        self._pending_yaw = None
+        self._pending_count = 0
+        self.max_yaw_jump_rad = math.radians(60.0)
+        self.yaw_confirm_frames = 3  # consecutive matching frames to accept a big jump as real
+
         # Target-ID lock: matches the convention validated across the
         # camera/camtestv5*.py tuning scripts (single physical marker,
         # id0, 100mm, DICT_6X6_50 as of the dictionary switch -- see
@@ -472,6 +488,37 @@ class ArucoDetector:
         y *= self.y_correction
         z *= self.z_correction
         yaw = marker_yaw_from_rvec(rvecs[target_idx])
+
+        # Reject implausible frame-to-frame yaw jumps (ArUco single-marker
+        # pose flip, see self.max_yaw_jump_rad above) -- fall back to the
+        # last accepted yaw rather than passing a spurious ~180deg error on.
+        # A jump that *persists* for yaw_confirm_frames in a row is treated
+        # as a real reorientation (not a one-frame flip) and accepted, so a
+        # genuine fast turn doesn't get stuck reporting a stale heading.
+        if self._last_yaw is None:
+            self._last_yaw = yaw
+        else:
+            jump = abs(math.atan2(math.sin(yaw - self._last_yaw),
+                                   math.cos(yaw - self._last_yaw)))
+            if jump <= self.max_yaw_jump_rad:
+                self._last_yaw = yaw
+                self._pending_yaw = None
+                self._pending_count = 0
+            else:
+                if self._pending_yaw is not None and abs(math.atan2(
+                        math.sin(yaw - self._pending_yaw),
+                        math.cos(yaw - self._pending_yaw))) <= self.max_yaw_jump_rad:
+                    self._pending_count += 1
+                else:
+                    self._pending_yaw = yaw
+                    self._pending_count = 1
+
+                if self._pending_count >= self.yaw_confirm_frames:
+                    self._last_yaw = yaw
+                    self._pending_yaw = None
+                    self._pending_count = 0
+                else:
+                    yaw = self._last_yaw
 
         cv2.drawFrameAxes(bgr, self.camera_matrix, self.dist_coeffs,
                            rvecs[target_idx], tvecs[target_idx], self.marker_size * 0.5)

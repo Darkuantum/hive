@@ -47,8 +47,17 @@ import numpy as np
 #
 CAMERA_MOUNT_ROLL_DEG = 0.0    # rotation of camera around its own x-axis
 CAMERA_MOUNT_PITCH_DEG = 0.0   # rotation around its own y-axis
-CAMERA_MOUNT_YAW_DEG = 90.0    # set from the live right/left test -- verify
-                                # sign against the real net before trusting it
+CAMERA_MOUNT_YAW_DEG = -90.0   # was +90 -- sign confirmed wrong 2026-08-12:
+                                # live yaw_cam ~90deg while the marker/vehicle
+                                # were physically aligned meant yaw_body sat
+                                # near +180deg (saturating the yaw PID) instead
+                                # of ~0. -90 brings it to ~0 for the same pose.
+                                # NOTE: this also flips the sign of x_body/y_body
+                                # (camera_to_body shares this same rotation),
+                                # so surge/sway gains identified before this fix
+                                # (gains.json) were tuned under the old sign and
+                                # likely need re-checking -- left as-is for now,
+                                # see frame_thruster_debug memory.
 
 
 def _rotation_matrix(roll_deg, pitch_deg, yaw_deg):
@@ -78,6 +87,21 @@ def camera_to_body(x_cam, y_cam, z_cam):
     v_cam = np.array([x_cam, y_cam, z_cam])
     x_body, y_body, z_body = _R_CAM_TO_BODY @ v_cam
     return x_body, y_body, z_body
+
+
+def body_to_camera(x_body, y_body, z_body):
+    """Inverse of camera_to_body(): body-frame vector -> camera-frame vector.
+
+    _R_CAM_TO_BODY is a pure rotation, so its inverse is its transpose.
+    Used to convert a body-frame setpoint offset (e.g. a closed-loop
+    validation step's "surge"/"sway" target) into the camera-frame offset
+    that, once camera_to_body() rotates it back, lands on the intended
+    body axis instead of leaking into a different one under a non-zero
+    CAMERA_MOUNT_YAW_DEG.
+    """
+    v_body = np.array([x_body, y_body, z_body])
+    x_cam, y_cam, z_cam = _R_CAM_TO_BODY.T @ v_body
+    return x_cam, y_cam, z_cam
 
 
 def marker_yaw_from_rvec(rvec):
@@ -231,7 +255,11 @@ class PoseController:
         # Target is 0 (centered / aligned) on all three axes
         error_surge = -x_body
         error_sway = -y_body
-        error_yaw = -yaw_body
+        # Wrap to (-pi, pi] -- yaw_body can sit past +-pi once
+        # CAMERA_MOUNT_YAW_DEG shifts it, and an unwrapped error drives the
+        # PID the "long way around" (e.g. treating a true ~5deg error as a
+        # ~355deg one) instead of the short way.
+        error_yaw = (np.pi - yaw_body) % (2 * np.pi) - np.pi
 
         vx = self.pid_surge.update(error_surge, dt)
         vy = self.pid_sway.update(error_sway, dt)
