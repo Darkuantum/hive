@@ -77,7 +77,12 @@ def camera_to_body(x_cam, y_cam, z_cam):
     """Convert a camera-frame pose into platform body-frame pose."""
     v_cam = np.array([x_cam, y_cam, z_cam])
     x_body, y_body, z_body = _R_CAM_TO_BODY @ v_cam
-    return x_body, y_body, z_body
+    # Cast off numpy.float64 back to plain float -- left as numpy, this
+    # propagates into PID output and eventually the Flask /api/state
+    # response, where numpy scalars (numpy>=2.0's numpy.bool_/float64)
+    # aren't JSON-serializable and 500 the endpoint the instant the
+    # engine starts actively controlling.
+    return float(x_body), float(y_body), float(z_body)
 
 
 def marker_yaw_from_rvec(rvec):
@@ -103,7 +108,7 @@ def camera_to_body_yaw(yaw_cam):
     angle, same idea as camera_to_body() but for orientation rather
     than position -- a pure rotation only needs the yaw component of
     the mount offset, not the full 3D rotation matrix."""
-    return yaw_cam + np.radians(CAMERA_MOUNT_YAW_DEG)
+    return float(yaw_cam + np.radians(CAMERA_MOUNT_YAW_DEG))
 
 
 # ---------------------------------------------------------------------
@@ -148,7 +153,7 @@ class PID:
 
         output = p_term + i_term + d_term
         output = max(-self.output_limit, min(self.output_limit, output))
-        return output
+        return float(output)
 
     def reset(self):
         """Call this when re-entering a controlling state (e.g. going

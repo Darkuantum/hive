@@ -409,7 +409,7 @@ class HardwareManager:
             # offset adds a constant error big enough to clip the PID
             # before the real orientation error is even factored in).
             if yaw_debug is not None:
-                yaw_debug['yaw_saturated'] = abs(r) >= 0.999
+                yaw_debug['yaw_saturated'] = bool(abs(r) >= 0.999)
         else:
             x = y = r = 0.0
             self.controller.reset()
