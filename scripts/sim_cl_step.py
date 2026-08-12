@@ -378,7 +378,7 @@ def make_plot(out_dir, name, axis, setpoint, gains, plant_params, records):
         ax.axvline(pre_end, color="grey", linestyle=":", linewidth=0.8)
     if step_end is not None:
         ax.axvline(step_end, color="grey", linestyle=":", linewidth=0.8)
-    ax.set_ylabel("Motor command (normalized)")
+    ax.set_ylabel("Motor command (±1 = full thrust)")
     ax.set_xlabel("Time (s)")
     ax.set_ylim(-1.1, 1.1)
     ax.set_title(f"{axis} motor command — kp={kp:.2f} ki={ki:.2f} kd={kd:.2f}",
@@ -416,12 +416,61 @@ def make_plot(out_dir, name, axis, setpoint, gains, plant_params, records):
         ax.axvline(pre_end, color="grey", linestyle=":", linewidth=0.8)
     if step_end is not None:
         ax.axvline(step_end, color="grey", linestyle=":", linewidth=0.8)
-    ax.set_ylabel("PID term output")
+    pid_label = "PID output (rad/s)" if axis == "yaw" else "PID output (m/s)"
+    ax.set_ylabel(pid_label)
     ax.set_xlabel("Time (s)")
     ax.set_title(f"{axis} PID terms — kp={kp:.2f} ki={ki:.2f} kd={kd:.2f}",
                  fontsize=10)
     ax.legend(loc="upper right", fontsize=8)
     path = os.path.join(out_dir, f"{name}_pid.png")
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    written.append(path)
+
+    # --- 4. Combined (3 subplots in one figure) ---
+    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, sharex=True,
+                                         figsize=(10, 10),
+                                         constrained_layout=True)
+    title = (f"Simulated closed-loop step — axis={axis} setpoint={setpoint} "
+             f"kp={kp:.2f} ki={ki:.2f} kd={kd:.2f} "
+             f"(K={plant_params['K']:.3f} tau={plant_params['tau']:.2f}s "
+             f"L={plant_params['L']:.2f}s)")
+    fig.suptitle(title, fontsize=10)
+
+    # Motor command
+    ax1.step(ts_all, motor_norms, where="post", linewidth=1.0)
+    ax1.axhline(0, color="grey", linewidth=0.5, linestyle="--")
+    if pre_end is not None:
+        ax1.axvline(pre_end, color="grey", linestyle=":", linewidth=0.8)
+    if step_end is not None:
+        ax1.axvline(step_end, color="grey", linestyle=":", linewidth=0.8)
+    ax1.set_ylabel("Motor command (±1 = full thrust)")
+    ax1.set_ylim(-1.1, 1.1)
+
+    # Position tracking
+    ax2.plot(ts_all, measured, linewidth=1.0, label="measured")
+    ax2.plot(ts_all, setpoints, "--", linewidth=0.8, label="setpoint")
+    if pre_end is not None:
+        ax2.axvline(pre_end, color="grey", linestyle=":", linewidth=0.8)
+    if step_end is not None:
+        ax2.axvline(step_end, color="grey", linestyle=":", linewidth=0.8)
+    ax2.set_ylabel(pos_label)
+    ax2.legend(loc="upper right", fontsize=8)
+
+    # PID terms
+    ax3.plot(ts_all, p_terms, linewidth=0.8, label="p")
+    ax3.plot(ts_all, i_terms, linewidth=0.8, label="i")
+    ax3.plot(ts_all, d_terms, linewidth=0.8, label="d")
+    ax3.plot(ts_all, outs, linewidth=1.0, label="out")
+    if pre_end is not None:
+        ax3.axvline(pre_end, color="grey", linestyle=":", linewidth=0.8)
+    if step_end is not None:
+        ax3.axvline(step_end, color="grey", linestyle=":", linewidth=0.8)
+    ax3.set_ylabel(pid_label)
+    ax3.set_xlabel("Time (s)")
+    ax3.legend(loc="upper right", fontsize=8)
+
+    path = os.path.join(out_dir, f"{name}_combined.png")
     fig.savefig(path, dpi=150)
     plt.close(fig)
     written.append(path)
