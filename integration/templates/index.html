@@ -38,14 +38,20 @@
           </div>
         </div>
 
+        <div class="power-row">
+          <label for="led-slider">LED brightness: <span id="led-value">50</span>%</label>
+          <input type="range" id="led-slider" min="0" max="100" step="5" value="50">
+        </div>
+
+        <div class="power-row">
+          <button id="refocus-btn">Refocus camera</button>
+          <span id="refocus-status" class="control-hint" style="margin-left:8px;"></span>
+        </div>
+
         <div id="manual-panel">
           <div class="power-row">
             <label for="power-slider">Power: <span id="power-value">100</span>%</label>
             <input type="range" id="power-slider" min="0" max="100" step="5" value="100">
-          </div>
-          <div class="power-row">
-            <label for="led-slider">LED brightness: <span id="led-value">50</span>%</label>
-            <input type="range" id="led-slider" min="0" max="100" step="5" value="50">
           </div>
           <div class="control-row">
             <div class="dpad" id="dpad">

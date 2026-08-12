@@ -133,6 +133,16 @@
     });
   });
 
+  // ---------------- camera refocus button ----------------
+  const refocusBtn = document.getElementById('refocus-btn');
+  const refocusStatusEl = document.getElementById('refocus-status');
+  refocusBtn.addEventListener('click', () => {
+    refocusStatusEl.textContent = 'requesting...';
+    fetch('/api/camera/refocus', { method: 'POST' }).catch(() => {
+      refocusStatusEl.textContent = 'request failed';
+    });
+  });
+
   // ---------------- ArduSub flight mode ----------------
   // This is ArduSub's OWN flight mode (MANUAL/STABILIZE/etc), separate
   // from this app's manual/auto control_mode toggle above.
@@ -254,6 +264,19 @@
 
       setBadge(badgeMavlink, m.connected, 'mavlink', m.error ? 'mavlink: ' + m.error : 'mavlink down');
       setBadge(badgeCamera, cam.connected, 'camera', cam.error ? 'camera: ' + cam.error : 'camera down');
+
+      if (refocusStatusEl) {
+        if (cam.refocus_pending) {
+          refocusStatusEl.textContent = 'refocusing...';
+        } else if (cam.refocus) {
+          const age = Date.now() / 1000 - cam.refocus.ts;
+          if (age < 5) {
+            refocusStatusEl.textContent = cam.refocus.ok ? 'focused' : 'did not converge';
+          } else {
+            refocusStatusEl.textContent = '';
+          }
+        }
+      }
 
       badgeArmed.classList.remove('good', 'warning', 'critical');
       badgeArmed.classList.add(m.armed ? 'good' : 'warning');

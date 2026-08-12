@@ -165,6 +165,13 @@ class HardwareManager:
         self._latest_pose = None
         self._latest_jpeg = None
 
+        # Manual refocus: set by request_refocus() (Flask thread), consumed
+        # by _camera_thread. Only that thread ever touches self.detector's
+        # picam2, so refocusing there instead of directly from the API
+        # handler avoids racing capture_and_detect().
+        self._refocus_requested = threading.Event()
+        self._last_refocus_result = None  # {'ok': bool, 'ts': float} or None
+
         self._stop = threading.Event()
         self._threads = []
 
@@ -831,7 +838,8 @@ class HardwareManager:
         gains = Gains.from_file(load_path)
         kw = gains.to_pose_controller_kwargs()
         self.controller.update_gains(
-            kp=kw['kp'], ki=kw['ki'], kd=kw['kd'],
+            surge_kp=kw['surge_kp'], surge_ki=kw['surge_ki'], surge_kd=kw['surge_kd'],
+            sway_kp=kw['sway_kp'], sway_ki=kw['sway_ki'], sway_kd=kw['sway_kd'],
             yaw_kp=kw['yaw_kp'], yaw_ki=kw['yaw_ki'], yaw_kd=kw['yaw_kd'],
         )
         return gains.to_dict()
@@ -1119,6 +1127,19 @@ class HardwareManager:
 
             try:
                 while not self._stop.is_set():
+                    if self._refocus_requested.is_set():
+                        self._refocus_requested.clear()
+                        # Blocks ~1-2s (autofocus_cycle) -- the live feed
+                        # and pose updates pause for the duration, which
+                        # is fine for a manually-triggered, occasional
+                        # button press.
+                        try:
+                            ok = self.detector.refocus()
+                            self._last_refocus_result = {'ok': ok, 'ts': time.time()}
+                        except Exception as exc:
+                            self._last_refocus_result = {'ok': False, 'ts': time.time(),
+                                                          'error': str(exc)}
+
                     pose, frame = self.detector.capture_and_detect()
                     ok, jpeg = cv2.imencode(
                         '.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, CAMERA_JPEG_QUALITY]
@@ -1153,10 +1174,23 @@ class HardwareManager:
             # video feed already carries the image separately
             return {k: v for k, v in self._latest_pose.items() if k != 'frame'}
 
+    def request_refocus(self):
+        """Ask the camera thread to run one autofocus scan on its next
+        loop iteration. Fire-and-forget -- check get_refocus_status() a
+        couple seconds later for the result."""
+        self._refocus_requested.set()
+
+    def get_refocus_status(self):
+        """Result of the most recent refocus() call, or None if none has
+        run yet this process. {'ok': bool, 'ts': epoch_seconds}."""
+        return self._last_refocus_result
+
     def get_camera_status(self):
         with self._lock:
             status = dict(self._camera_status)
             status['marker_detected'] = self._latest_pose is not None
+        status['refocus'] = self._last_refocus_result
+        status['refocus_pending'] = self._refocus_requested.is_set()
         return status
 
     def get_jpeg_frame(self):

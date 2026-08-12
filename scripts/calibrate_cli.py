@@ -238,6 +238,28 @@ def cmd_apply(args):
         print(f'Gain computation failed: {exc}', file=sys.stderr)
         return 1
 
+    # compute_gains() only fills in the identified axis on a fresh Gains()
+    # with the other two axes reset to defaults -- if gains.json already
+    # holds real values for another axis (e.g. you applied surge earlier
+    # and are now applying sway), starting from a blank Gains() here would
+    # silently wipe them out. Load whatever's already on disk first and
+    # merge just the newly-identified axis into it.
+    from calibration.io import Gains
+    if os.path.exists(output):
+        merged = Gains.from_file(output)
+    else:
+        merged = Gains()
+    if args.axis == 'surge':
+        merged.surge_kp, merged.surge_ki, merged.surge_kd = (
+            result.gains.surge_kp, result.gains.surge_ki, result.gains.surge_kd)
+    elif args.axis == 'sway':
+        merged.sway_kp, merged.sway_ki, merged.sway_kd = (
+            result.gains.sway_kp, result.gains.sway_ki, result.gains.sway_kd)
+    elif args.axis == 'yaw':
+        merged.yaw_kp, merged.yaw_ki, merged.yaw_kd = (
+            result.gains.yaw_kp, result.gains.yaw_ki, result.gains.yaw_kd)
+    result.gains = merged
+
     try:
         result.gains.to_file(output)
     except Exception as exc:

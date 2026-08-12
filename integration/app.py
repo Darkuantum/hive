@@ -91,6 +91,16 @@ def api_led():
     return jsonify({'ok': True, 'brightness': manager.get_led_brightness() * 100.0})
 
 
+@app.route('/api/camera/refocus', methods=['POST'])
+def api_camera_refocus():
+    """Trigger a one-shot autofocus scan. Async -- returns immediately,
+    result lands in get_refocus_status() ~1-2s later (poll /api/state or
+    call this route's GET counterpart isn't needed, /api/state already
+    surfaces it under camera.refocus)."""
+    manager.request_refocus()
+    return jsonify({'ok': True, 'requested': True})
+
+
 @app.route('/api/control_mode', methods=['POST'])
 def api_control_mode():
     """Switch between 'manual' (web-page sticks) and 'auto' (camera +
@@ -393,36 +403,37 @@ def main():
                          help="Number of LEDs on the DotStar strip (default: 8)")
     parser.add_argument('--no-led', action='store_true',
                          help="Skip LED strip startup (e.g. bench-testing off-Pi)")
+    parser.add_argument('--af-mode', choices=['continuous', 'once'], default='continuous',
+                         help="Camera autofocus mode (see camFinal.py --af-mode for "
+                              "full explanation). 'continuous' re-hunts focus every "
+                              "frame -- right for a real approach where distance keeps "
+                              "changing. 'once' focuses a single time at startup then "
+                              "holds still -- right for bench/pool calibration at a "
+                              "roughly fixed distance, where continuous AF re-hunts on "
+                              "ripples/glare/marker motion and looks like focus loss.")
     parser.add_argument('--host', default='0.0.0.0',
                          help="Bind address (0.0.0.0 so other devices on the "
                               "LAN can reach a headless Pi)")
     parser.add_argument('--port', type=int, default=8000)
-    # PID tuning (override pose_controller.py defaults at runtime)
-    parser.add_argument('--kp', type=float, default=None, help='Surge/sway proportional gain')
-    parser.add_argument('--ki', type=float, default=None, help='Surge/sway integral gain')
-    parser.add_argument('--kd', type=float, default=None, help='Surge/sway derivative gain')
-    parser.add_argument('--yaw-kp', type=float, default=None, help='Yaw proportional gain')
-    parser.add_argument('--yaw-ki', type=float, default=None, help='Yaw integral gain')
-    parser.add_argument('--yaw-kd', type=float, default=None, help='Yaw derivative gain')
-    # Gains file (load PID gains from JSON; CLI args still override)
-    parser.add_argument('--gains-file', default=None, type=str,
-                         help='Path to gains.json for PID gain persistence')
+    # PID gains: JSON file only (see calibration/io.py's Gains dataclass for
+    # schema). Deliberately no per-value --kp/--sway-kp/... flags -- with
+    # independent surge/sway/yaw gains that's 9 flags to keep consistent,
+    # and calibrate_cli.py apply already writes this file directly. Edit
+    # gains.json (or point --gains-file elsewhere) and restart to change
+    # gains; there's no hot-drop-a-single-value path from the CLI anymore.
+    parser.add_argument('--gains-file', default='gains.json', type=str,
+                         help='Path to gains JSON for PID gain persistence '
+                              '(missing file falls back to code defaults)')
     args = parser.parse_args()
-
-    pose_kw = {}
-    for key in ('kp', 'ki', 'kd', 'yaw_kp', 'yaw_ki', 'yaw_kd'):
-        arg_val = getattr(args, key.replace('-', '_'))
-        if arg_val is not None:
-            pose_kw[key] = arg_val
 
     manager = HardwareManager(
         mavlink_conn=args.mavlink_conn,
         mavlink_baud=args.mavlink_baud,
         enable_camera=not args.no_camera,
+        camera_kwargs={'af_mode': args.af_mode},
         enable_external=not args.no_external,
         enable_led=not args.no_led,
         num_leds=args.num_leds,
-        pose_controller_kw=pose_kw or None,
         gains_file=args.gains_file,
     )
     manager.start()

@@ -199,7 +199,8 @@ class ArucoDetector:
                  hfov_deg=100.0, vfov_deg=72.0, marker_size=0.10,
                  x_correction=0.95, y_correction=0.9, z_correction=1.8,
                  exposure_us=20000, gain=4.0, auto_exposure=True,
-                 autofocus=True, tuning_file="imx708_noir.json",
+                 autofocus=True, af_mode="continuous",
+                 tuning_file="imx708_noir.json",
                  calib_path=None, enhance_low_light=True,
                  dehaze=True, white_balance=False, gamma=1.0, clahe_clip=3.0,
                  target_id=0, id_filter=True):
@@ -301,9 +302,23 @@ class ArucoDetector:
         # Nothing was ever driving focus -- AfMode defaults to Manual with
         # whatever fixed LensPosition the sensor happens to power up at, so
         # the lens never actually re-focuses on the target. autofocus=True
-        # turns on continuous AF with the full (macro-to-infinity) range so
-        # it tracks the marker as distance changes during a real approach.
+        # turns on AF (mode controlled by af_mode below) so it can focus on
+        # the target in the first place.
         self.autofocus = autofocus
+        # 'continuous': AfMode=Continuous -- keeps re-hunting focus every
+        #   frame as the scene changes. Right for a real approach, where
+        #   distance to the AUV is genuinely changing. On a bench/pool rig
+        #   at roughly fixed distance, water ripples, glare, and marker
+        #   motion during step tests are enough scene change to keep
+        #   re-triggering full hunts, which shows up as focus loss/blur at
+        #   exactly the moments detection needs to be reliable.
+        # 'once': runs a single autofocus_cycle() in start() and leaves
+        #   AfMode=Auto afterward -- Auto mode only refocuses when
+        #   explicitly triggered, so once it converges the lens just stays
+        #   put. Right for calibration testing at a fixed distance.
+        if af_mode not in ("continuous", "once"):
+            raise ValueError(f"af_mode must be 'continuous' or 'once', got {af_mode!r}")
+        self.af_mode = af_mode
         self.picam2 = None
 
     def start(self):
@@ -326,10 +341,47 @@ class ArucoDetector:
         if not self.auto_exposure:
             camera_controls["ExposureTime"] = self.exposure_us
             camera_controls["AnalogueGain"] = self.gain
-        if self.autofocus:
+        if self.autofocus and self.af_mode == "continuous":
             camera_controls["AfMode"] = libcamera_controls.AfModeEnum.Continuous
             camera_controls["AfRange"] = libcamera_controls.AfRangeEnum.Full
         self.picam2.set_controls(camera_controls)
+
+        if self.autofocus and self.af_mode == "once":
+            self.refocus()
+
+    def refocus(self) -> bool:
+        """Run one autofocus scan right now and hold the result.
+
+        Safe to call whenever the lens looks wrong (e.g. the startup
+        scan in start() locked onto the wrong thing, or the rig's
+        distance from the marker changed) -- not just at start(). In
+        'continuous' af_mode this briefly drops to Auto for the scan and
+        switches back to Continuous afterward, so an on-demand refocus
+        doesn't change the configured steady-state behavior. Returns
+        whether the scan converged; the lens is left wherever it ended
+        up either way (better than nothing even on a failed convergence).
+        """
+        if self.picam2 is None or not self.autofocus:
+            return False
+        # Auto mode is required for a one-shot trigger -- in 'once' mode
+        # we're already sitting in Auto (from start() or a prior
+        # refocus()), and in 'continuous' mode this temporarily drops out
+        # of Continuous for the duration of the scan.
+        self.picam2.set_controls({
+            "AfMode": libcamera_controls.AfModeEnum.Auto,
+            "AfRange": libcamera_controls.AfRangeEnum.Full,
+        })
+        converged = self.picam2.autofocus_cycle()
+        if not converged:
+            print("[camFinal] one-shot autofocus did not converge -- "
+                  "check marker distance/lighting; lens may be left "
+                  "hunting or mis-focused", file=sys.stderr)
+        if self.af_mode == "continuous":
+            self.picam2.set_controls({
+                "AfMode": libcamera_controls.AfModeEnum.Continuous,
+                "AfRange": libcamera_controls.AfRangeEnum.Full,
+            })
+        return bool(converged)
 
     def stop(self):
         if self.picam2:
@@ -443,6 +495,7 @@ def _run_preview(args):
         y_correction=args.y_correction, z_correction=args.z_correction,
         exposure_us=args.exposure_us, gain=args.gain,
         auto_exposure=args.auto_exposure, autofocus=args.autofocus,
+        af_mode=args.af_mode,
         tuning_file=args.tuning_file,
         calib_path=args.calib,
         enhance_low_light=not args.no_enhance_low_light,
@@ -505,6 +558,7 @@ def _run_calibration_check(args):
         y_correction=args.y_correction, z_correction=args.z_correction,
         exposure_us=args.exposure_us, gain=args.gain,
         auto_exposure=args.auto_exposure, autofocus=args.autofocus,
+        af_mode=args.af_mode,
         tuning_file=args.tuning_file,
         calib_path=args.calib,
         enhance_low_light=not args.no_enhance_low_light,
@@ -617,11 +671,19 @@ if __name__ == "__main__":
     parser.set_defaults(auto_exposure=True)
     parser.add_argument("--no-autofocus", dest="autofocus", action="store_false",
                          help="Leave the lens at whatever fixed manual position it "
-                              "powers up at instead of running continuous AF (default: "
-                              "continuous AF is ON, full macro-to-infinity range). "
+                              "powers up at instead of running AF (default: "
+                              "AF is ON, mode set by --af-mode). "
                               "Nothing was ever driving focus before this flag existed, "
                               "so the lens previously just sat wherever it defaulted to.")
     parser.set_defaults(autofocus=True)
+    parser.add_argument("--af-mode", choices=["continuous", "once"], default="continuous",
+                         help="'continuous' (default) keeps re-hunting focus every frame "
+                              "-- right for a real approach where distance keeps changing. "
+                              "'once' runs a single autofocus scan at startup then holds "
+                              "the lens still -- right for bench/pool calibration at a "
+                              "roughly fixed distance, where continuous AF re-hunts on "
+                              "ripples/glare/marker motion and shows up as focus loss "
+                              "during exactly the moments detection needs to be sharp.")
     parser.add_argument("--tuning-file", default="imx708_noir.json",
                          help="libcamera tuning file name to load (default: "
                               "imx708_noir.json -- this module has no IR-cut "

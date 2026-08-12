@@ -126,14 +126,19 @@ class Gains:
             raise exc
 
     def to_pose_controller_kwargs(self) -> dict:
-        """Map to PoseController constructor args.
+        """Map to PoseController constructor/update_gains args.
 
-        Surge and sway share kp/ki/kd (matches existing PoseController signature).
+        Surge and sway are independent, explicit gains -- neither is
+        derived from the other (PoseController takes surge_kp/ki/kd and
+        sway_kp/ki/kd as separate, equally-required arguments).
         """
         return {
-            "kp": self.surge_kp,
-            "ki": self.surge_ki,
-            "kd": self.surge_kd,
+            "surge_kp": self.surge_kp,
+            "surge_ki": self.surge_ki,
+            "surge_kd": self.surge_kd,
+            "sway_kp": self.sway_kp,
+            "sway_ki": self.sway_ki,
+            "sway_kd": self.sway_kd,
             "yaw_kp": self.yaw_kp,
             "yaw_ki": self.yaw_ki,
             "yaw_kd": self.yaw_kd,

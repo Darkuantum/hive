@@ -180,10 +180,17 @@ class PoseController:
     the net to rotate to face the same way as the incoming AUV, not to
     hold some fixed compass heading."""
 
-    def __init__(self, kp=0.6, ki=0.05, kd=0.15, output_limit=0.4,
+    def __init__(self, surge_kp=0.6, surge_ki=0.05, surge_kd=0.15,
+                 sway_kp=0.6, sway_ki=0.05, sway_kd=0.15,
+                 output_limit=0.4,
                  yaw_kp=0.8, yaw_ki=0.0, yaw_kd=0.1, yaw_output_limit=0.6):
-        self.pid_surge = PID(kp, ki, kd, output_limit=output_limit)
-        self.pid_sway = PID(kp, ki, kd, output_limit=output_limit)
+        # surge and sway each get their own explicit gains -- physically
+        # different thruster geometry/drag per axis means there's no reason
+        # to expect one tuning to suit both. Same numeric defaults for
+        # both so an unconfigured controller behaves like before, but
+        # neither is derived from the other at runtime.
+        self.pid_surge = PID(surge_kp, surge_ki, surge_kd, output_limit=output_limit)
+        self.pid_sway = PID(sway_kp, sway_ki, sway_kd, output_limit=output_limit)
         # Yaw often responds differently than translation (platform
         # inertia around its vertical axis vs. linear drag), so it gets
         # its own gains and output limit rather than sharing surge/sway's.
@@ -196,15 +203,19 @@ class PoseController:
         # Latest state populated after each compute() for telemetry logging
         self.last_state = None
 
-    def update_gains(self, kp, ki, kd, yaw_kp, yaw_ki, yaw_kd):
+    def update_gains(self, surge_kp, surge_ki, surge_kd,
+                      sway_kp, sway_ki, sway_kd,
+                      yaw_kp, yaw_ki, yaw_kd):
         """Update PID gains in place. Does NOT reset integrator state
-        (preserves windup behavior across live reloads)."""
-        self.pid_surge.kp = kp
-        self.pid_surge.ki = ki
-        self.pid_surge.kd = kd
-        self.pid_sway.kp = kp
-        self.pid_sway.ki = ki
-        self.pid_sway.kd = kd
+        (preserves windup behavior across live reloads).
+
+        Every axis is set explicitly -- no axis is derived from another."""
+        self.pid_surge.kp = surge_kp
+        self.pid_surge.ki = surge_ki
+        self.pid_surge.kd = surge_kd
+        self.pid_sway.kp = sway_kp
+        self.pid_sway.ki = sway_ki
+        self.pid_sway.kd = sway_kd
         self.pid_yaw.kp = yaw_kp
         self.pid_yaw.ki = yaw_ki
         self.pid_yaw.kd = yaw_kd
