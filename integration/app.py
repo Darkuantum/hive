@@ -177,10 +177,12 @@ def main():
     parser.add_argument('--yaw-kp', type=float, default=None, help='Yaw proportional gain')
     parser.add_argument('--yaw-ki', type=float, default=None, help='Yaw integral gain')
     parser.add_argument('--yaw-kd', type=float, default=None, help='Yaw derivative gain')
+    parser.add_argument('--output-limit', type=float, default=None, help='Surge/sway max stick output (0-1)')
+    parser.add_argument('--yaw-output-limit', type=float, default=None, help='Yaw max stick output (0-1)')
     args = parser.parse_args()
 
     pose_kw = {}
-    for key in ('kp', 'ki', 'kd', 'yaw_kp', 'yaw_ki', 'yaw_kd'):
+    for key in ('kp', 'ki', 'kd', 'yaw_kp', 'yaw_ki', 'yaw_kd', 'output_limit', 'yaw_output_limit'):
         arg_val = getattr(args, key.replace('-', '_'))
         if arg_val is not None:
             pose_kw[key] = arg_val
