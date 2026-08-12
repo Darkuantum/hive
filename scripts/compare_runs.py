@@ -22,6 +22,7 @@ try:
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    from matplotlib.lines import Line2D
     _matplotlib_ok = True
 except ImportError:
     plt = None
@@ -99,16 +100,20 @@ def plot_per_axis(axis, out_dir):
         t, m, sp = align(rows, axis)
         if not t:
             continue
-        ax.plot(t, m, linewidth=1.0, label=scenario, color=colors[scenario])
-        # Use the setpoint from the last scenario (they're all 0.1 in this case)
-        if scenario == SCENARIOS[-1]:
-            ax.axhline(sp[0] if sp else 0.1, color="grey", linestyle="--",
-                       linewidth=0.8, label="setpoint")
+        ax.plot(t, m, linewidth=1.5, label=scenario, color=colors[scenario])
+        # Overlay THIS run's own step input (reference) so the setpoint shape
+        # (0 -> 0.1 at step onset, held, then -> 0 at post) is visible, not a
+        # flat line. Each scenario plots its own reference (hold lengths differ).
+        ax.plot(t, sp, linewidth=1.0, linestyle="--", color=colors[scenario],
+                alpha=0.75)
 
     ax.set_xlabel("Time (s)")
     ax.set_ylabel(y_label)
     ax.set_title(f"{axis} position tracking: initial vs tuned vs actual", fontsize=10)
-    ax.legend(loc="upper right", fontsize=8)
+    handles, labels = ax.get_legend_handles_labels()
+    handles.append(Line2D([0], [0], linestyle="--", color="grey", linewidth=1.0))
+    labels.append("step input (reference)")
+    ax.legend(handles, labels, loc="upper right", fontsize=8)
 
     png_path = os.path.join(out_dir, f"comparison_{axis}.png")
     fig.savefig(png_path, dpi=200)
@@ -134,16 +139,18 @@ def plot_master(out_dir):
             t, m, sp = align(rows, axis)
             if not t:
                 continue
-            ax.plot(t, m, linewidth=1.0, label=scenario, color=colors[scenario])
-            if scenario == SCENARIOS[-1]:
-                ax.axhline(sp[0] if sp else 0.1, color="grey", linestyle="--",
-                           linewidth=0.8, label="setpoint")
+            ax.plot(t, m, linewidth=1.5, label=scenario, color=colors[scenario])
+            # Each run's own step input (reference), dashed in its color.
+            ax.plot(t, sp, linewidth=1.0, linestyle="--", color=colors[scenario],
+                    alpha=0.75)
         ax.set_xlabel("Time (s)")
         ax.set_ylabel(y_label)
         ax.set_title(axis, fontsize=10)
 
-    # Single shared legend from the last axis that has data
+    # Shared legend: measured (solid) per scenario + step-input (dashed) proxy.
     handles, labels = axes[-1].get_legend_handles_labels()
+    handles.append(Line2D([0], [0], linestyle="--", color="grey", linewidth=1.0))
+    labels.append("step input")
     fig.legend(handles, labels, loc="upper center", ncol=4, fontsize=8)
     fig.suptitle("Position tracking: initial vs tuned vs actual", fontsize=11, y=1.02)
 
