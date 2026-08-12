@@ -127,6 +127,29 @@ def camera_to_body_yaw(yaw_cam):
     return float(yaw_cam + np.radians(CAMERA_MOUNT_YAW_DEG))
 
 
+def _wrap_pi(angle):
+    """Wrap an angle (radians) to [-pi, pi)."""
+    return (angle + np.pi) % (2.0 * np.pi) - np.pi
+
+
+DEFAULT_YAW_SNAP_AXES = 4
+
+
+def snapped_yaw_error(yaw_body, n_axes=DEFAULT_YAW_SNAP_AXES):
+    """Signed shortest yaw error to the nearest of n_axes equivalent headings.
+
+    n_axes=4 (hive with 4 symmetric openings) -> targets every pi/2. The error
+    is invariant under yaw_body -> yaw_body + pi: a 180deg ArUco PnP flip maps
+    onto another valid opening, so it yields the SAME error and cannot saturate
+    the yaw PID. Returns radians in (-pi/2, pi/2]; for n_axes=4, (-pi/4, pi/4].
+    n_axes < 2 disables snapping (targets heading 0)."""
+    if n_axes < 2:
+        return _wrap_pi(-yaw_body)
+    step = 2.0 * np.pi / n_axes
+    nearest = round(yaw_body / step) * step
+    return _wrap_pi(nearest - yaw_body)
+
+
 # ---------------------------------------------------------------------
 # 2. PID CONTROLLER
 # ---------------------------------------------------------------------
@@ -189,7 +212,8 @@ class PoseController:
     hold some fixed compass heading."""
 
     def __init__(self, kp=0.6, ki=0.05, kd=0.15, output_limit=0.4,
-                 yaw_kp=0.8, yaw_ki=0.0, yaw_kd=0.1, yaw_output_limit=0.6):
+                 yaw_kp=0.8, yaw_ki=0.0, yaw_kd=0.1, yaw_output_limit=0.6,
+                 yaw_snap_axes=DEFAULT_YAW_SNAP_AXES):
         self.pid_surge = PID(kp, ki, kd, output_limit=output_limit)
         self.pid_sway = PID(kp, ki, kd, output_limit=output_limit)
         # Yaw often responds differently than translation (platform
@@ -200,6 +224,32 @@ class PoseController:
         # current pushing the platform sideways does; add it back if
         # you see persistent steady-state yaw error in testing.
         self.pid_yaw = PID(yaw_kp, yaw_ki, yaw_kd, output_limit=yaw_output_limit)
+
+        self.yaw_snap_axes = yaw_snap_axes
+        self.snap_hysteresis_rad = np.radians(10.0)   # boundary hysteresis (doubled-angle space)
+        self._snap_locked_axis = None                  # 0.0 or pi (the two opening axes)
+
+    def _snap_yaw_error(self, yaw_body):
+        """4-axis snap error for the yaw PID, with boundary hysteresis.
+
+        Flip-invariant via doubled-angle space (a +pi yaw flip = +2pi there =
+        no-op), so an ArUco PnP 180deg flip yields the identical error and
+        cannot saturate the yaw PID. Hysteresis stops the target axis toggling
+        when the vessel sits near a 45deg cell boundary."""
+        if self.yaw_snap_axes < 2:
+            return _wrap_pi(-yaw_body)
+        a = _wrap_pi(2.0 * yaw_body)            # doubled-angle: flip-invariant
+        d0 = abs(_wrap_pi(a - 0.0))
+        dpi = abs(_wrap_pi(a - np.pi))
+        nearest = 0.0 if d0 <= dpi else np.pi
+        if self._snap_locked_axis is None:
+            self._snap_locked_axis = nearest
+        else:
+            d_locked = abs(_wrap_pi(a - self._snap_locked_axis))
+            d_nearest = d0 if nearest == 0.0 else dpi
+            if nearest != self._snap_locked_axis and d_nearest < d_locked - self.snap_hysteresis_rad:
+                self._snap_locked_axis = nearest
+        return _wrap_pi(self._snap_locked_axis - a) / 2.0
 
     def compute(self, x_cam, y_cam, z_cam, yaw_cam, dt):
         """Returns (vx, vy, yaw_rate) ready for
@@ -212,7 +262,7 @@ class PoseController:
         # Target is 0 (centered / aligned) on all three axes
         error_surge = -x_body
         error_sway = -y_body
-        error_yaw = -yaw_body
+        error_yaw = self._snap_yaw_error(yaw_body)
 
         vx = self.pid_surge.update(error_surge, dt)
         vy = self.pid_sway.update(error_sway, dt)
@@ -224,6 +274,7 @@ class PoseController:
         self.pid_surge.reset()
         self.pid_sway.reset()
         self.pid_yaw.reset()
+        self._snap_locked_axis = None
 
 
 # ---------------------------------------------------------------------

@@ -179,6 +179,8 @@ def main():
     parser.add_argument('--yaw-kd', type=float, default=None, help='Yaw derivative gain')
     parser.add_argument('--output-limit', type=float, default=None, help='Surge/sway max stick output (0-1)')
     parser.add_argument('--yaw-output-limit', type=float, default=None, help='Yaw max stick output (0-1)')
+    parser.add_argument('--yaw-snap-axes', type=int, default=4,
+                        help='Snap yaw to nearest of N equivalent headings (4 for the hive\'s openings; <2 disables)')
     args = parser.parse_args()
 
     pose_kw = {}
@@ -186,6 +188,9 @@ def main():
         arg_val = getattr(args, key.replace('-', '_'))
         if arg_val is not None:
             pose_kw[key] = arg_val
+    pose_kw['yaw_snap_axes'] = args.yaw_snap_axes
+
+    engine_kw = {'yaw_snap_axes': args.yaw_snap_axes}
 
     camera_kw = {'dict_name': args.camera_dict} if args.camera_dict else None
 
@@ -198,6 +203,7 @@ def main():
         enable_led=not args.no_led,
         num_leds=args.num_leds,
         pose_controller_kw=pose_kw or None,
+        engine_kw=engine_kw,
     )
     manager.start()
     try:

@@ -14,6 +14,8 @@ States: SEARCHING -> DETECTED -> ALIGNING -> READY -> RECOVERING
 import time
 from enum import Enum, auto
 
+from pose_controller import snapped_yaw_error
+
 
 class RecoveryState(Enum):
     SEARCHING = auto()
@@ -27,6 +29,7 @@ class DecisionEngine:
     def __init__(self,
                  center_tolerance=0.15,     # meters -- how close to 0 counts as centered
                  yaw_tolerance_rad=0.15,    # ~8.6 deg -- how close to aligned counts as aligned
+                 yaw_snap_axes=4,
                  stability_tolerance_rad=0.1,  # ~5.7 deg tilt -- platform "calm enough"
                  ready_dwell_s=2.5,         # must hold all conditions this long before READY
                  close_range_z=0.3,         # meters -- below this, marker loss = capture
@@ -35,6 +38,7 @@ class DecisionEngine:
                  aligning_timeout_s=60.0):  # give up and go back to SEARCHING if stuck this long
         self.center_tolerance = center_tolerance
         self.yaw_tolerance_rad = yaw_tolerance_rad
+        self.yaw_snap_axes = yaw_snap_axes
         self.stability_tolerance_rad = stability_tolerance_rad
         self.ready_dwell_s = ready_dwell_s
         self.close_range_z = close_range_z
@@ -66,7 +70,7 @@ class DecisionEngine:
             abs(y_body) < self.center_tolerance
         )
         aligned = (
-            yaw_body is not None and abs(yaw_body) < self.yaw_tolerance_rad
+            yaw_body is not None and abs(snapped_yaw_error(yaw_body, self.yaw_snap_axes)) < self.yaw_tolerance_rad
         )
         platform_stable = (
             platform_roll is not None and platform_pitch is not None and

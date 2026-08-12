@@ -90,6 +90,7 @@ class HardwareManager:
                 print(f"LED controller unavailable: {exc}")
 
         self._lock = threading.Lock()
+        self._engine_kw = engine_kw or {}
         self._mavlink_status = {'connected': False, 'error': None}
         self._camera_status = {'connected': False, 'error': None}
         self._external_status = {'connected': False, 'error': None}
@@ -185,7 +186,7 @@ class HardwareManager:
             # auto session that ended in RECOVERING (terminal state,
             # see decision_engine.py) would silently refuse to control
             # ever again, with no obvious symptom besides "nothing moves".
-            self.engine = DecisionEngine()
+            self.engine = DecisionEngine(**self._engine_kw)
             self.controller.reset()
             self._last_auto_time = None
             with self._lock:
