@@ -269,8 +269,17 @@ class PoseController:
         yaw_body = camera_to_body_yaw(yaw_cam)
 
         # Target is 0 (centered / aligned) on all three axes
-        error_surge = -x_body
-        error_sway = -y_body
+        # error_surge/error_sway sign flipped 2026-08-13 at the user's
+        # request, live-tested manually: the un-flipped sign was
+        # confirmed backwards for both axes. NOTE: this does not fix
+        # the deeper cross-wiring issue found the same session -- x_body
+        # (labeled surge) is currently fed camera left/right position,
+        # not real depth (z_cam is discarded entirely, see
+        # camera_to_body()'s _z_body) -- that redesign (routing z_cam
+        # into surge, plus deciding a standoff-distance target instead
+        # of raw-zero) was explicitly deferred, not done here.
+        error_surge = x_body
+        error_sway = y_body
         error_yaw = self._snap_yaw_error(yaw_body)
 
         vx = self.pid_surge.update(error_surge, dt)
