@@ -306,6 +306,12 @@ class ArucoDetector:
         self.autofocus = autofocus
         self.picam2 = None
 
+        # Continuity state for _filter_yaw_flip() -- see that method.
+        # Reset to None whenever the marker isn't detected, so a stale
+        # yaw from a previous, possibly very different encounter never
+        # anchors the filter.
+        self._last_yaw = None
+
     def start(self):
         tuning = Picamera2.load_tuning_file(self.tuning_file) if self.tuning_file else None
         self.picam2 = Picamera2(tuning=tuning)
@@ -348,6 +354,29 @@ class ArucoDetector:
         """
         pose, _frame = self.capture_and_detect()
         return pose
+
+    def _filter_yaw_flip(self, yaw):
+        """estimatePoseSingleMarkers() (solvePnP under the hood) has a
+        well-known ambiguity for a near-head-on square marker: it can
+        return one of two valid orientations roughly pi apart, and
+        flip between them frame to frame even though the marker itself
+        hasn't moved. A real yaw change of ~150+ degrees in one 20 Hz
+        frame (50 ms) is not physically plausible, so treat a jump that
+        big as this flip artifact and snap it back onto the previous
+        frame's branch instead of passing the raw jump downstream --
+        without this, the PID yaw error alternates between ~0 and
+        ~+-pi every frame and the yaw thruster output saturates and
+        flips sign continuously regardless of the marker's real
+        orientation. self._last_yaw is reset to None on any frame
+        where the marker isn't detected (see capture_and_detect()), so
+        this never anchors across a real detection gap."""
+        if self._last_yaw is not None:
+            diff = math.atan2(math.sin(yaw - self._last_yaw), math.cos(yaw - self._last_yaw))
+            if abs(diff) > math.radians(150):
+                flipped = yaw - math.pi if diff > 0 else yaw + math.pi
+                yaw = math.atan2(math.sin(flipped), math.cos(flipped))
+        self._last_yaw = yaw
+        return yaw
 
     def capture_and_detect(self):
         """Like get_pose(), but always returns (pose_or_None, frame) --
@@ -395,6 +424,7 @@ class ArucoDetector:
                     ids = np.array([[marker_id]])
                     break
             else:
+                self._last_yaw = None
                 return None, bgr
 
         # draws every marker seen (including a non-target stray tag) so it's
@@ -405,6 +435,7 @@ class ArucoDetector:
         if self.id_filter:
             matches = np.flatnonzero(ids_flat == self.target_id)
             if matches.size == 0:
+                self._last_yaw = None
                 return None, bgr
             target_idx = int(matches[0])
         else:
@@ -420,6 +451,7 @@ class ArucoDetector:
         y *= self.y_correction
         z *= self.z_correction
         yaw = marker_yaw_from_rvec(rvecs[target_idx])
+        yaw = self._filter_yaw_flip(yaw)
 
         cv2.drawFrameAxes(bgr, self.camera_matrix, self.dist_coeffs,
                            rvecs[target_idx], tvecs[target_idx], self.marker_size * 0.5)
