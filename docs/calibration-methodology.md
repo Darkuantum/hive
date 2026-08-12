@@ -71,7 +71,7 @@ Kd = τ · Kp          ← cancels the plant's first-order lag
 τ_cl = max(τ, 0.5)   ← desired closed-loop time constant (don't be faster than the actuator)
 ```
 
-The **Kd = τ·Kp term provides pole-zero cancellation** so the closed loop is **dominated by** a single pole at −1/τ_cl (the SIMC/IMC design intent), with faster auxiliary poles from the integrating plant. Response is effectively overdamped → 10–90% rise and ~0% overshoot are the **design targets**; the small actual deviations (rise inflated ~30% vs the ideal τ_cl·ln9, occasional overshoot from dead time + the derivative filter) are **reported in §6**.
+The **Kd = τ·Kp term provides pole-zero cancellation** so the closed loop is **dominated by** a single pole at −1/τ_cl (the SIMC/IMC design intent), with faster auxiliary poles from the integrating plant — this is the ideal, overdamped, ~0%-overshoot **design target**. In practice the cancellation is exact only for the ideal plant: dead time L + the discrete derivative + ArUco noise leave the loop **underdamped** — measured (sim) overshoot is **22–31%** with **no ±5% settle within 10 s** (see §6). The gains therefore need de-rating or a stronger derivative filter before deployment.
 
 ## 5. Closed-loop validation
 
@@ -79,7 +79,7 @@ Inject a position setpoint step (e.g., 0.1 m surge) and measure tracking. **Metr
 
 | metric | definition |
 |---|---|
-| Rise time | 10–90% of setpoint (overdamped 1st-order closed loop; python-control/MATLAB default) |
+| Rise time | 10–90% of setpoint (python-control/MATLAB default; computed on the median-smoothed signal — the raw 10% crossing is noise-induced) |
 | Settling time | ±5% band (process-industry convention; also more robust to extract from noisy ArUco telemetry than ±2%) |
 | Overshoot | (peak − final)/final, first peak |
 | SSE | \|mean(last 20% of step) − setpoint\| |
@@ -97,21 +97,23 @@ Inject a position setpoint step (e.g., 0.1 m surge) and measure tracking. **Metr
 | sway | 0.079 (m/s)/unit | 2.16 | 0.10 | 6/6 (cleanest) | velocity NRMSE |
 | yaw | 0.10 (rad/s)/unit **(synth)** | 2.0 **(synth)** | 0.05 | 0/3 | **no fit — ArUco-corrupted** |
 
-**Initial vs λ/IMC-tuned (sim), 10 s hold, 0.1 setpoint:**
+**Initial vs λ/IMC-tuned (sim), 10 s hold, 0.1 setpoint — metrics on median-smoothed signal:**
 
-| axis | scenario | Kp/Ki/Kd | rise (s) | OS% | SSE | RMSE |
-|---|---|---|---|---|---|---|
-| surge | initial | 0.6/0.05/0.15 | — (slow) | 0 | 0.038 | high |
-| surge | tuned | 4.0/0.54/7.36 | 5.3 | ~0 | 0.017 | low |
-| sway | initial | 0.6/0.05/0.15 | — (slow) | 0 | 0.020 | high |
-| sway | tuned | 2.34/0.27/5.07 | 5.7 | ~0 | 0.011 | low |
-| yaw | tuned (synth plant) | 3.0/0.375/6.0 | 4.8 | 6 | 0.029 | — |
+| axis | scenario | Kp/Ki/Kd | rise (s) | OS% | SSE | RMSE | settle (s) |
+|---|---|---|---|---|---|---|---|
+| surge | initial | 0.6/0.05/0.15 | never | 0 | 0.038 | 0.072 | >9.9 |
+| surge | tuned | 4.0/0.54/7.36 | 3.7† | 31 | 0.024 | 0.046 | >9.9 |
+| sway | initial | 0.6/0.05/0.15 | never | 0 | 0.020 | 0.065 | >9.9 |
+| sway | tuned | 2.34/0.27/5.07 | 4.4† | 22 | 0.017 | 0.044 | >9.9 |
+| yaw | tuned (synth plant) | 3.0/0.375/6.0 | 3.5† | 26 | 0.019 | 0.040 | >9.9 |
+
+† rise 10–90% on the smoothed signal. "never" = did not reach 90% in 10 s; ">9.9" = no ±5% settle within the 10 s capture. Initial gains never reach the setpoint (sluggish); tuned gains overshoot 22–31% and do not settle — **neither is deployable as-is** (see derivative-thrashing below).
 
 > **2–3 significant figures only** — our pipeline prints 6 decimals elsewhere; that implies false precision on noisy data.
 
 > *Yaw initial-vs-tuned omitted — the synthesized yaw plant makes the before/after comparison uninformative.*
 
-**Derivative-thrashing finding (load-bearing caveat):** the tuned gains' high **Kd** (7.36 surge, 6.0 yaw) amplifies ArUco position noise through the raw derivative → the motor saturates and oscillates frame-to-frame even with a light derivative filter (d_filter=0.15s). Measured: tuned surge motor saturates ~20% of the step, ~20 sign-changes; initial gains (Kd=0.15) saturate 0%. **The λ/IMC gains are not directly deployable** — they need either a stronger derivative filter or de-rating. The original deployed gains (0.6/0.8) are smooth precisely because their Kd is tiny.
+**Derivative-thrashing finding (load-bearing caveat):** the tuned gains' high **Kd** (7.36 surge, 6.0 yaw) amplifies ArUco position noise through the raw derivative → the motor saturates and oscillates frame-to-frame even with a light derivative filter (d_filter=0.15s). Measured (step phase): tuned-gains motor saturates 13% with 44 sign-changes (surge); sway 4% / 52; yaw 6% / 55. Initial gains (Kd=0.15): 0% saturation, 0 sign-changes — smooth. **The λ/IMC gains are not directly deployable** — they need either a stronger derivative filter or de-rating. The original deployed gains (0.6/0.8) are smooth precisely because their Kd is tiny.
 
 ## 7. Real-frame extrapolation (2 m, ~125 kg, fully submerged)
 
