@@ -47,8 +47,24 @@ import numpy as np
 #
 CAMERA_MOUNT_ROLL_DEG = 0.0    # rotation of camera around its own x-axis
 CAMERA_MOUNT_PITCH_DEG = 0.0   # rotation around its own y-axis
-CAMERA_MOUNT_YAW_DEG = 90.0    # set from the live right/left test -- verify
-                                # sign against the real net before trusting it
+CAMERA_MOUNT_YAW_DEG = 0.0     # live-calibrated 2026-08-13: held the marker
+                                # square-on to the camera and read yaw_body
+                                # via hardware.py's yaw_debug -- the old
+                                # 90deg placeholder was turning that into a
+                                # false ~90deg body-yaw error, saturating the
+                                # yaw PID regardless of the marker's real
+                                # orientation. 90deg was clearly wrong either
+                                # way, but treat 0.0 here as a rough fix, not
+                                # a trusted calibration: estimatePoseSingleMarkers()
+                                # has a real two-solution ambiguity for a
+                                # near-head-on marker (~180deg apart), and a
+                                # repeat of this same square-on test on a
+                                # different detection session read ~178deg
+                                # instead of ~0deg. Don't trust either number
+                                # until camFinal.py picks between the two PnP
+                                # solutions by reprojection error instead of
+                                # whichever one estimatePoseSingleMarkers()
+                                # happens to return first.
 
 
 def _rotation_matrix(roll_deg, pitch_deg, yaw_deg):
