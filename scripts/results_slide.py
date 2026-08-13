@@ -91,17 +91,17 @@ def main():
             if d_i:
                 ax.plot(d_i[0], d_i[1], color="#1f77b4", linewidth=1.3, alpha=0.7, label="default")
         # tuned (orange)
-        ax.plot(t_t, m_t, color="#d55e00", linewidth=2.0, alpha=0.85, label="λ/IMC tuned")
+        ax.plot(t_t, m_t, color="#d55e00", linewidth=2.0, alpha=0.85, label="λ/IMC (λ=τ)")
         # de-rated (green, bold) -- the deployable result
         d_d = load(axis, "derated")
         if d_d:
-            ax.plot(d_d[0], d_d[1], color="#009e73", linewidth=2.6, label="de-rated (selected)")
+            ax.plot(d_d[0], d_d[1], color="#009e73", linewidth=2.6, label="λ/IMC (λ=2τ, selected)")
         # metrics: tuned vs de-rated (step phase)
         rise_t, os_t, settle_t, sse_t = step_metrics(t_t, m_t, sp_t, sp_hold)
         if d_d:
             rise_d, os_d, settle_d, sse_d = step_metrics(d_d[0], d_d[1], d_d[2], sp_hold)
-            box = (f"λ/IMC    : OS {os_t:.0f}%, SSE {sse_t:.3f}\n"
-                   f"de-rated : OS {os_d:.0f}%, SSE {sse_d:.3f}")
+            box = (f"λ=τ      : OS {os_t:.0f}%, SSE {sse_t:.3f}\n"
+                   f"λ=2τ     : OS {os_d:.0f}%, SSE {sse_d:.3f}")
         else:
             box = (f"tuned: OS {os_t:.0f}%, SSE {sse_t:.3f}")
         ax.text(0.02, 0.97, box, transform=ax.transAxes, fontsize=9, va="top",
@@ -118,7 +118,7 @@ def main():
               + (f" | de-rated OS={os_d:.0f}% SSE={sse_d:.3f}" if d_d else ""))
     # single legend inside the first panel (avoids title/legend overlap)
     axes[0].legend(legend_handles, legend_labels, loc="lower right", fontsize=10, frameon=True)
-    fig.suptitle("Closed-loop step response: default vs λ/IMC vs de-rated gains",
+    fig.suptitle("Closed-loop step response: default vs λ/IMC (λ=τ and 2τ)",
                  fontsize=13)
     out = os.path.join(LOGS, "results_slide.png")
     fig.savefig(out, dpi=200, bbox_inches="tight")
